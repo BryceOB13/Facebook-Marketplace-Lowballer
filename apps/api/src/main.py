@@ -69,8 +69,8 @@ async def root():
 
 
 # Import and include routers
-# from src.routers import search, deals, negotiations, websocket
-# app.include_router(search.router, prefix="/api", tags=["search"])
-# app.include_router(deals.router, prefix="/api", tags=["deals"])
-# app.include_router(negotiations.router, prefix="/api", tags=["negotiations"])
-# app.include_router(websocket.router, prefix="/api", tags=["websocket"])
+from src.routers import search, deals, negotiations
+
+app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(deals.router, prefix="/api", tags=["deals"])
+app.include_router(negotiations.router, prefix="/api", tags=["negotiations"])
