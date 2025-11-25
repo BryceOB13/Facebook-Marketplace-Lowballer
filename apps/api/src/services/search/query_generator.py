@@ -1,14 +1,21 @@
 """
-Query variation generator - LOCAL ONLY, no LLM calls.
+Query variation generator - Uses Claude Haiku for intelligent query expansion.
 Generates multiple search variations to maximize coverage.
 """
 
 import re
+import os
 from typing import List, Set
+import anthropic
 
 
 class QueryGenerator:
-    """Generate query variations without using any LLM"""
+    """Generate query variations using Claude Haiku (cost-optimized)"""
+    
+    def __init__(self):
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        self.client = anthropic.Anthropic(api_key=api_key) if api_key else None
+        self.use_llm = self.client is not None
     
     # Common marketplace synonyms
     SYNONYMS = {
@@ -49,7 +56,7 @@ class QueryGenerator:
     
     def generate_variations(self, query: str) -> List[str]:
         """
-        Generate 3-5 query variations using local logic only.
+        Generate 3-5 query variations using Claude Haiku + local logic.
         
         Args:
             query: Original search query
@@ -57,29 +64,59 @@ class QueryGenerator:
         Returns:
             List of query variations (including original)
         """
-        variations: Set[str] = {query.lower().strip()}
+        variations: Set[str] = {query.lower().strip(), query}
         
-        # Add original
-        variations.add(query)
+        # Try LLM-based generation first (Haiku is cheap: $0.25/MTok)
+        if self.use_llm:
+            llm_variations = self._generate_with_llm(query)
+            variations.update(llm_variations)
         
-        # Add with/without brand names
+        # Fallback to local logic if LLM unavailable or for additional coverage
         brand_variations = self._extract_brand_variations(query)
         variations.update(brand_variations)
         
-        # Add synonym variations
         synonym_variations = self._get_synonym_variations(query)
         variations.update(synonym_variations)
         
-        # Add plural/singular
         plural_variations = self._get_plural_singular(query)
         variations.update(plural_variations)
         
-        # Add common misspellings/variations
         spelling_variations = self._get_spelling_variations(query)
         variations.update(spelling_variations)
         
         # Return top 5 most relevant
         return list(variations)[:5]
+    
+    def _generate_with_llm(self, query: str) -> Set[str]:
+        """
+        Use Claude Haiku to generate intelligent query variations.
+        Cost: ~$0.001 per query (very cheap)
+        """
+        try:
+            response = self.client.messages.create(
+                model="claude-3-haiku-20240307",  # Cheapest model
+                max_tokens=100,
+                temperature=0.3,
+                system="You are a search query optimizer for Facebook Marketplace. Generate 3-4 alternative search queries that would find the same items. Return ONLY the queries, one per line, no explanations.",
+                messages=[{
+                    "role": "user",
+                    "content": f"Generate search variations for: {query}"
+                }]
+            )
+            
+            # Parse response
+            text = response.content[0].text
+            variations = set()
+            for line in text.strip().split('\n'):
+                clean = line.strip().strip('-').strip('*').strip()
+                if clean and len(clean) > 2:
+                    variations.add(clean.lower())
+            
+            return variations
+        except Exception as e:
+            # If LLM fails, return empty set (will use local fallbacks)
+            print(f"LLM query generation failed: {e}")
+            return set()
     
     def _extract_brand_variations(self, query: str) -> Set[str]:
         """Extract brand names and create variations"""
