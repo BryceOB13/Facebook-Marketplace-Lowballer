@@ -148,6 +148,12 @@ Run property-based tests:
 pytest tests/property/ -v
 ```
 
+## Documentation
+
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Complete system architecture, cost optimization strategies, and implementation roadmap
+- **[Setup Guide](SETUP.md)** - Detailed setup instructions
+- **[Contributing](CONTRIBUTING.md)** - Contribution guidelines
+
 ## Project Structure
 
 ```
@@ -155,11 +161,17 @@ marketplace-deal-scout/
 ├── .kiro/
 │   ├── mcp.json              # MCP server configuration
 │   └── specs/                # Feature specifications
+├── docs/
+│   └── ARCHITECTURE.md       # Complete architecture guide
 ├── src/
+│   ├── agent/                # Agent implementations
+│   ├── browser_automation/   # Chrome DevTools integration
 │   ├── config/               # Configuration module
-│   │   ├── __init__.py
-│   │   └── agent_config.py
-│   └── __init__.py
+│   ├── error_handling/       # Error handling and retries
+│   ├── filtering/            # Result filtering
+│   ├── memory/               # Memory management
+│   ├── rate_limiting/        # Rate limiting
+│   └── session/              # Session management
 ├── tests/                    # Test suite
 ├── requirements.txt          # Python dependencies
 ├── setup.py                  # Package setup
