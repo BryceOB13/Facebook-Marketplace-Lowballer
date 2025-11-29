@@ -2,6 +2,10 @@
 FastAPI main application for Deal Scout.
 """
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -190,8 +194,9 @@ async def demo_page():
 
 
 # Import and include routers
-from src.routers import search, deals, negotiations
+from src.routers import search, deals, negotiations, ebay_notifications
 
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(deals.router, prefix="/api", tags=["deals"])
 app.include_router(negotiations.router, prefix="/api", tags=["negotiations"])
+app.include_router(ebay_notifications.router, prefix="/api", tags=["ebay"])

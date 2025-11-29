@@ -215,40 +215,141 @@ class EbayBrowseClient:
         self,
         query: str,
         category_ids: Optional[List[str]] = None,
-        condition: Optional[str] = None
+        condition: Optional[str] = None,
+        reference_price: Optional[float] = None
     ) -> Dict[str, float]:
         """
         Get price statistics for a query (avg, median, min, max).
         
+        Args:
+            query: Search query
+            category_ids: eBay category IDs
+            condition: Item condition filter
+            reference_price: The listing price we're comparing against (used for smart filtering)
+        
         Returns:
-            Dict with avg_price, median_price, min_price, max_price, sample_size
+            Dict with avg_price, median_price, min_price, max_price, sample_size, items
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"[EBAY SEARCH] Query: '{query}', Condition: {condition}, Reference: ${reference_price or 0:.0f}")
+        
+        # Search without price filter first, then filter results
         items = await self.search_items(
             query=query,
             category_ids=category_ids,
-            condition=condition,
+            condition=None,  # Don't filter by condition - too restrictive
             limit=200,
-            sort="price"
+            sort="newlyListed"  # Better relevance than sorting by price
         )
         
+        logger.info(f"[EBAY SEARCH] Raw results: {len(items)} items")
+        if items:
+            raw_prices = sorted([item.price for item in items])
+            logger.info(f"[EBAY SEARCH] Raw price range: ${raw_prices[0]:.2f} - ${raw_prices[-1]:.2f}")
+        
+        # SMART FILTERING: Use reference price as the primary signal
+        # If someone is selling something for $700, we should compare to similar-priced items
+        if items and len(items) > 3:
+            # Step 1: PRICE-BASED FILTERING (most important)
+            # The listing price tells us what price range we should be looking at
+            if reference_price and reference_price > 50:
+                # Filter to items within a reasonable range of the listing price
+                # This is the key insight: a $700 item should compare to $300-$1500 items, not $20 accessories
+                min_reasonable = reference_price * 0.25  # 25% of listing price
+                max_reasonable = reference_price * 2.5   # 250% of listing price
+                
+                price_filtered = [item for item in items if min_reasonable <= item.price <= max_reasonable]
+                
+                logger.info(f"[EBAY SEARCH] Price filter range: ${min_reasonable:.0f}-${max_reasonable:.0f}")
+                logger.info(f"[EBAY SEARCH] Items in range: {len(price_filtered)} of {len(items)}")
+                
+                if len(price_filtered) >= 3:
+                    items = price_filtered
+                else:
+                    # If too few items in range, try a wider range
+                    min_wider = reference_price * 0.15
+                    max_wider = reference_price * 4.0
+                    wider_filtered = [item for item in items if min_wider <= item.price <= max_wider]
+                    if len(wider_filtered) >= 3:
+                        items = wider_filtered
+                        logger.info(f"[EBAY SEARCH] Using wider range: ${min_wider:.0f}-${max_wider:.0f}, {len(items)} items")
+            
+            # Step 2: Title relevance filtering - ensure results are the MAIN product, not accessories
+            # Accessories often mention the main product ("for Sony A7 II", "compatible with...")
+            accessory_indicators = [
+                ' for ', ' fits ', ' compatible ', ' replacement ', ' cover ', ' case ',
+                ' strap ', ' battery ', ' charger ', ' grip ', ' mount ', ' adapter ',
+                ' cable ', ' cord ', ' screen protector ', ' filter ', ' hood ', ' cap ',
+                ' remote ', ' trigger ', ' plate ', ' bracket ', ' bag ', ' pouch ',
+                ' book ', ' guide ', ' manual ', ' dummy '
+            ]
+            
+            main_product_items = []
+            for item in items:
+                title_lower = item.title.lower()
+                # Check if this looks like an accessory (mentions "for [product]" pattern)
+                is_accessory = any(indicator in title_lower for indicator in accessory_indicators)
+                
+                if not is_accessory:
+                    main_product_items.append(item)
+            
+            if len(main_product_items) >= 3:
+                items = main_product_items
+                logger.info(f"[EBAY SEARCH] After accessory filter: {len(items)} main products")
+            
+            # Step 3: IQR filtering on remaining items to remove outliers
+            if len(items) > 5:
+                prices = sorted([item.price for item in items])
+                q1_idx = len(prices) // 4
+                q3_idx = (3 * len(prices)) // 4
+                q1 = prices[q1_idx]
+                q3 = prices[q3_idx]
+                iqr = q3 - q1
+                
+                lower_bound = q1 - 1.5 * iqr
+                upper_bound = q3 + 1.5 * iqr
+                
+                iqr_filtered = [item for item in items if lower_bound <= item.price <= upper_bound]
+                
+                if len(iqr_filtered) >= 3:
+                    items = iqr_filtered
+                    logger.info(f"[EBAY SEARCH] After IQR filter: {len(items)} items")
+        
         if not items:
+            logger.warning(f"[EBAY SEARCH] No items found for query: '{query}'")
             return {
                 "avg_price": 0,
                 "median_price": 0,
                 "min_price": 0,
                 "max_price": 0,
-                "sample_size": 0
+                "sample_size": 0,
+                "items": []
             }
         
         prices = [item.price for item in items]
         prices.sort()
         
+        # TRACE: Log sample of items found
+        logger.info(f"[EBAY SEARCH] Final: {len(items)} items for '{query}'")
+        logger.info(f"[EBAY SEARCH] Price range: ${prices[0]:.2f} - ${prices[-1]:.2f}")
+        logger.info(f"[EBAY SEARCH] Sample items:")
+        for item in items[:5]:
+            logger.info(f"  - {item.title[:60]}... ${item.price:.2f}")
+        
+        avg_price = sum(prices) / len(prices)
+        median_price = prices[len(prices) // 2]
+        
+        logger.info(f"[EBAY SEARCH] Avg: ${avg_price:.2f}, Median: ${median_price:.2f}")
+        
         return {
-            "avg_price": sum(prices) / len(prices),
-            "median_price": prices[len(prices) // 2],
+            "avg_price": avg_price,
+            "median_price": median_price,
             "min_price": prices[0],
             "max_price": prices[-1],
-            "sample_size": len(prices)
+            "sample_size": len(prices),
+            "items": items  # Return items for analysis
         }
     
     async def find_comparable_items(

@@ -7,6 +7,7 @@ import os
 from typing import Dict, List, Optional
 import anthropic
 from .ebay_client import EbayBrowseClient, EbayItem
+from .query_optimizer import EbayQueryOptimizer
 from ...models.deal import Deal, DealRating
 
 
@@ -33,6 +34,7 @@ class DealAnalyzer:
     
     def __init__(self):
         self.ebay_client = EbayBrowseClient()
+        self.query_optimizer = EbayQueryOptimizer()
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         self.claude = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
     
@@ -57,22 +59,59 @@ class DealAnalyzer:
         Returns:
             Dict with deal_rating, profit_estimate, roi_percent, ebay_avg_price, etc.
         """
+        # Optimize the query for eBay search - pass description for better extraction
+        optimized = self.query_optimizer.optimize_query(listing_title, listing_description)
+        search_query = optimized["primary_query"]
+        secondary_queries = optimized.get("secondary_queries", [])
+        
+        # TRACE: Log query optimization
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"=== DEAL ANALYSIS ===")
+        logger.info(f"Original title: {listing_title}")
+        logger.info(f"Description preview: {listing_description[:100] if listing_description else 'None'}...")
+        logger.info(f"Optimized query: {search_query}")
+        logger.info(f"Listing price: ${listing_price:.2f}")
+        logger.info(f"Expected eBay filter range: ${listing_price * 0.25:.0f} - ${listing_price * 2.5:.0f}")
+        logger.info(f"Secondary queries: {secondary_queries}")
+        
         async with self.ebay_client:
-            # Get eBay market data
+            # Get eBay market data for PRIMARY item with reference price for smart filtering
             ebay_stats = await self.ebay_client.get_price_statistics(
-                query=listing_title,
-                condition=listing_condition
+                query=search_query,
+                condition=listing_condition,
+                reference_price=listing_price  # Pass listing price for smart filtering
             )
             
-            comparable_items = await self.ebay_client.find_comparable_items(
-                title=listing_title,
-                price=listing_price,
-                condition=listing_condition
-            )
+            # Get the actual items found for analysis
+            comparable_items = ebay_stats.get("items", [])
+            
+            # Calculate BUNDLE VALUE by searching for accessories
+            bundle_value = ebay_stats.get("median_price", 0)
+            accessory_values = []
+            
+            for accessory in secondary_queries[:3]:  # Limit to 3 accessories
+                try:
+                    acc_stats = await self.ebay_client.get_price_statistics(
+                        query=accessory,
+                        condition=listing_condition,
+                        reference_price=None  # Don't filter accessories by price
+                    )
+                    if acc_stats["median_price"] > 0:
+                        accessory_values.append({
+                            "item": accessory,
+                            "value": acc_stats["median_price"]
+                        })
+                        bundle_value += acc_stats["median_price"]
+                except Exception:
+                    pass  # Skip failed accessory searches
         
-        # Calculate basic metrics
+        # Calculate basic metrics using BUNDLE value
         ebay_avg = ebay_stats["avg_price"]
         ebay_median = ebay_stats["median_price"]
+        
+        # Use bundle value if we found accessories
+        total_market_value = bundle_value if bundle_value > ebay_median else ebay_median
         
         if ebay_avg == 0:
             # No market data available
@@ -81,14 +120,17 @@ class DealAnalyzer:
                 "profit_estimate": 0,
                 "roi_percent": 0,
                 "ebay_avg_price": 0,
+                "ebay_median_price": 0,
                 "confidence": "LOW",
-                "reason": "No comparable eBay listings found"
+                "reason": "No comparable eBay listings found",
+                "comparable_count": 0,
+                "score": 0
             }
         
-        # Calculate profit potential
+        # Calculate profit potential using TOTAL bundle value
         profit_analysis = self._calculate_profit(
             purchase_price=listing_price,
-            expected_sale_price=ebay_median,
+            expected_sale_price=total_market_value,
             platform="ebay"
         )
         
@@ -107,8 +149,8 @@ class DealAnalyzer:
                 title=listing_title,
                 description=listing_description,
                 price=listing_price,
-                ebay_avg=ebay_avg,
-                comparable_items=comparable_items[:5]
+                ebay_avg=total_market_value,
+                comparable_items=comparable_items[:10]
             )
             
             # Adjust score based on AI insights
@@ -116,21 +158,37 @@ class DealAnalyzer:
             reason = ai_insights["reasoning"]
         else:
             final_score = base_score
-            reason = self._generate_basic_reason(listing_price, ebay_avg, profit_analysis)
+            # Use dynamic analysis based on actual data
+            reason = self._generate_dynamic_analysis(
+                listing_title=listing_title,
+                listing_price=listing_price,
+                ebay_avg=total_market_value,
+                ebay_median=ebay_median,
+                comparable_items=comparable_items,
+                profit_analysis=profit_analysis
+            )
         
         # Determine rating
         rating = self._score_to_rating(final_score)
+        
+        # Build reason with bundle info if applicable
+        if accessory_values:
+            bundle_breakdown = ", ".join([f"{a['item']}: ${a['value']:.0f}" for a in accessory_values])
+            reason = f"{reason} Bundle includes: {bundle_breakdown}. Total market value: ${total_market_value:.0f}"
         
         return {
             "deal_rating": rating,
             "profit_estimate": profit_analysis["net_profit"],
             "roi_percent": profit_analysis["roi"],
-            "ebay_avg_price": ebay_avg,
+            "ebay_avg_price": total_market_value,  # Use bundle value
             "ebay_median_price": ebay_median,
             "confidence": self._calculate_confidence(ebay_stats["sample_size"]),
             "reason": reason,
             "comparable_count": len(comparable_items),
-            "score": round(final_score, 2)
+            "score": round(final_score, 2),
+            "bundle_value": total_market_value,
+            "primary_item_value": ebay_median,
+            "accessories": accessory_values
         }
     
     def _calculate_profit(
@@ -181,13 +239,16 @@ class DealAnalyzer:
         - Absolute profit (20%)
         - Market data confidence (10%)
         """
-        # Price discount score (0-100)
-        discount_pct = ((ebay_median - listing_price) / ebay_median) * 100
-        discount_score = min(discount_pct * 2, 100)  # 50% discount = 100 points
+        # Price discount score (0-100) - clamp to valid range
+        if ebay_median > 0:
+            discount_pct = ((ebay_median - listing_price) / ebay_median) * 100
+        else:
+            discount_pct = 0
+        discount_score = max(0, min(discount_pct * 2, 100))  # Clamp 0-100
         
-        # ROI score (0-100)
+        # ROI score (0-100) - clamp to valid range
         roi = profit_analysis["roi"]
-        roi_score = min(roi, 100)  # 100% ROI = 100 points
+        roi_score = max(0, min(roi, 100))  # Clamp 0-100
         
         # Profit score (0-100)
         profit = profit_analysis["net_profit"]
@@ -261,37 +322,42 @@ class DealAnalyzer:
         if not self.claude:
             return {"score": 50, "reasoning": "AI analysis unavailable"}
         
-        # Format comparable items
+        # Format comparable items with actual data
         comparables_text = "\n".join([
-            f"- {item.title}: ${item.price} ({item.condition})"
-            for item in comparable_items
-        ])
+            f"- {item.title}: ${item.price:.2f} ({item.condition})"
+            for item in comparable_items[:10]  # Show up to 10 comparables
+        ]) if comparable_items else "No comparable items found"
         
         prompt = f"""Analyze this Facebook Marketplace deal for resale potential:
 
 LISTING:
 Title: {title}
-Price: ${price}
-Description: {description[:500]}
+Asking Price: ${price:.2f}
+Description: {description[:500] if description else 'No description provided'}
 
-MARKET DATA:
-eBay Average: ${ebay_avg}
-Comparable eBay Listings:
+EBAY MARKET DATA:
+Average selling price: ${ebay_avg:.2f}
+Number of comparable listings: {len(comparable_items)}
+
+COMPARABLE EBAY LISTINGS:
 {comparables_text}
 
-Assess this deal on a 0-100 scale considering:
-1. Price vs market value
-2. Item condition/authenticity concerns from description
-3. Resale demand indicators
-4. Hidden costs or red flags
+Based on the ACTUAL market data above, assess this deal on a 0-100 scale.
+
+Consider:
+1. Price comparison: Is ${price:.2f} a good deal compared to the ${ebay_avg:.2f} eBay average?
+2. What the listing title suggests about condition/completeness
+3. Any red flags or concerns from the comparable listings
+
+IMPORTANT: Your analysis MUST reference the actual prices shown above. Do not make up numbers.
 
 Respond in JSON format:
-{{"score": <0-100>, "reasoning": "<2-3 sentence explanation>"}}"""
+{{"score": <0-100>, "reasoning": "<2-3 sentence analysis referencing actual prices>"}}"""
 
         try:
             response = self.claude.messages.create(
                 model="claude-3-haiku-20240307",
-                max_tokens=200,
+                max_tokens=250,
                 temperature=0.3,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -302,3 +368,57 @@ Respond in JSON format:
         except Exception as e:
             print(f"AI analysis failed: {e}")
             return {"score": 50, "reasoning": "AI analysis error"}
+    
+    def _generate_dynamic_analysis(
+        self,
+        listing_title: str,
+        listing_price: float,
+        ebay_avg: float,
+        ebay_median: float,
+        comparable_items: List[EbayItem],
+        profit_analysis: Dict
+    ) -> str:
+        """Generate analysis text based on actual market data"""
+        profit = profit_analysis["net_profit"]
+        roi = profit_analysis["roi"]
+        
+        # Calculate discount percentage
+        if ebay_avg > 0:
+            discount_pct = ((ebay_avg - listing_price) / ebay_avg) * 100
+        else:
+            discount_pct = 0
+        
+        # Build analysis based on actual data
+        parts = []
+        
+        # Price comparison
+        if listing_price < ebay_avg:
+            parts.append(f"At ${listing_price:.0f}, this is {abs(discount_pct):.0f}% below the eBay average of ${ebay_avg:.0f}.")
+        elif listing_price > ebay_avg:
+            parts.append(f"At ${listing_price:.0f}, this is {abs(discount_pct):.0f}% above the eBay average of ${ebay_avg:.0f}.")
+        else:
+            parts.append(f"At ${listing_price:.0f}, this matches the eBay average price.")
+        
+        # Profit assessment
+        if profit > 100:
+            parts.append(f"Strong profit potential of ${profit:.0f} ({roi:.0f}% ROI) after fees.")
+        elif profit > 0:
+            parts.append(f"Modest profit potential of ${profit:.0f} ({roi:.0f}% ROI) after fees.")
+        else:
+            parts.append(f"Negative margin of ${abs(profit):.0f} - would lose money on resale.")
+        
+        # Comparable items insight
+        if comparable_items:
+            prices = [item.price for item in comparable_items[:5]]
+            if prices:
+                price_range = f"${min(prices):.0f}-${max(prices):.0f}"
+                parts.append(f"Similar items on eBay are selling for {price_range}.")
+        
+        # Title-based observations
+        title_lower = listing_title.lower()
+        if "not included" in title_lower or "body only" in title_lower:
+            parts.append("Note: Listing indicates missing components which may affect resale value.")
+        elif "bundle" in title_lower or "kit" in title_lower:
+            parts.append("Bundle listing - individual items may have different resale values.")
+        
+        return " ".join(parts)
