@@ -15,15 +15,17 @@ logger = logging.getLogger(__name__)
 class ListingExtractor:
     """Extract listing data from Facebook Marketplace HTML"""
     
-    # JavaScript extraction script
+    # JavaScript extraction script - updated for current Facebook Marketplace structure
     EXTRACTION_SCRIPT = """
     (function() {
         const listings = [];
         
-        // Find all listing links
+        // Facebook uses multiple possible selectors
         const links = document.querySelectorAll('a[href*="/marketplace/item/"]');
         
-        links.forEach(link => {
+        console.log('Found ' + links.length + ' marketplace links');
+        
+        links.forEach((link, index) => {
             try {
                 // Extract ID from URL
                 const match = link.href.match(/\\/marketplace\\/item\\/(\\d+)/);
@@ -32,38 +34,56 @@ class ListingExtractor:
                 const id = match[1];
                 
                 // Find parent container
-                const container = link.closest('[role="article"], [data-testid*="marketplace"]') || link.parentElement;
-                
-                // Extract title (from link text or nearby heading)
-                let title = link.textContent.trim();
-                if (!title || title.length < 3) {
-                    const heading = container.querySelector('h2, h3, [role="heading"]');
-                    title = heading ? heading.textContent.trim() : '';
+                let container = link.closest('div[class*="x1"]');
+                if (!container) {
+                    container = link.parentElement?.parentElement?.parentElement;
+                }
+                if (!container) {
+                    container = link;
                 }
                 
-                // Extract price (look for $ symbol)
-                let price = '';
-                const priceElements = container.querySelectorAll('span, div');
-                for (const el of priceElements) {
-                    const text = el.textContent.trim();
-                    if (text.includes('$') && /\\$[\\d,]+/.test(text)) {
-                        price = text.match(/\\$[\\d,]+/)[0];
-                        break;
+                // Extract title from aria-label (most reliable)
+                let title = link.getAttribute('aria-label') || '';
+                title = title.trim();
+                
+                // If aria-label is too long or contains price, it's not the title
+                if (title.includes('$') || title.length > 100) {
+                    title = '';
+                }
+                
+                // Fallback: get first span with meaningful text
+                if (!title) {
+                    const spans = container.querySelectorAll('span');
+                    for (const span of spans) {
+                        const text = span.textContent.trim();
+                        // Skip if it's a price, location, or too short
+                        if (text.length > 5 && text.length < 100 && !text.includes('$') && !text.includes(',')) {
+                            title = text;
+                            break;
+                        }
                     }
                 }
                 
-                // Extract location
+                // Extract price
+                let price = '';
+                const priceMatch = container.textContent.match(/\\$[\\d,]+/);
+                if (priceMatch) {
+                    price = priceMatch[0];
+                }
+                
+                // Extract location - look for city, state pattern
                 let location = '';
-                const locationElements = container.querySelectorAll('span[dir="auto"]');
-                for (const el of locationElements) {
-                    const text = el.textContent.trim();
-                    if (text.includes(',') || text.includes('miles')) {
+                const allSpans = container.querySelectorAll('span');
+                for (const span of allSpans) {
+                    const text = span.textContent.trim();
+                    // Look for "City, State" or "X miles away"
+                    if ((text.match(/^[A-Z][a-z]+,\\s*[A-Z]{2}$/) || text.includes('miles')) && text !== title) {
                         location = text;
                         break;
                     }
                 }
                 
-                // Extract image URL
+                // Extract image
                 let imageUrl = '';
                 const img = container.querySelector('img');
                 if (img) {
@@ -71,22 +91,24 @@ class ListingExtractor:
                 }
                 
                 // Only add if we have minimum required data
-                if (id && (title || price)) {
+                if (id && title && title.length > 2) {
                     listings.push({
                         id: id,
-                        title: title || 'Untitled',
+                        title: title,
                         price: price || 'Price not listed',
                         location: location || null,
                         image_url: imageUrl || null,
                         url: link.href,
-                        seller_name: null
+                        seller_name: null,
+                        description: null
                     });
                 }
             } catch (e) {
-                console.error('Error extracting listing:', e);
+                console.error('Error extracting listing ' + index + ':', e);
             }
         });
         
+        console.log('Extracted ' + listings.length + ' listings');
         return listings;
     })()
     """

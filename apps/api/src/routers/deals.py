@@ -151,19 +151,33 @@ async def track_deal(listing_id: str):
 async def get_hot_deals():
     """
     Get currently hot deals (HOT and GOOD ratings only).
+    Fetches pre-scored deals from the database.
     """
     try:
-        # Fetch recent listings
         pool = get_pg_pool()
         async with pool.acquire() as conn:
+            # Fetch deals that are already scored as HOT or GOOD
             rows = await conn.fetch("""
-                SELECT * FROM listings
-                ORDER BY scraped_at DESC
-                LIMIT 100
+                SELECT l.*, d.ebay_avg_price, d.profit_estimate, d.roi_percent,
+                       d.deal_rating, d.why_standout, d.category, d.match_score
+                FROM listings l
+                JOIN deals d ON l.id = d.listing_id
+                WHERE d.deal_rating IN ('HOT', 'GOOD')
+                ORDER BY 
+                    CASE d.deal_rating 
+                        WHEN 'HOT' THEN 0 
+                        WHEN 'GOOD' THEN 1 
+                        ELSE 2 
+                    END,
+                    d.profit_estimate DESC NULLS LAST,
+                    l.scraped_at DESC
+                LIMIT 20
             """)
         
-        listings = [
-            Listing(
+        # Convert to Deal objects
+        deals = []
+        for row in rows:
+            deal = Deal(
                 id=row['id'],
                 title=row['title'],
                 price=row['price'],
@@ -172,22 +186,76 @@ async def get_hot_deals():
                 image_url=row['image_url'],
                 url=row['url'],
                 seller_name=row['seller_name'],
+                description=row.get('description'),
                 scraped_at=row['scraped_at'],
-                created_at=row['created_at']
+                created_at=row['created_at'],
+                ebay_avg_price=row['ebay_avg_price'],
+                profit_estimate=row['profit_estimate'],
+                roi_percent=row['roi_percent'],
+                deal_rating=DealRating(row['deal_rating']),
+                is_new=True,
+                price_changed=False,
+                old_price=None,
+                why_standout=row['why_standout'],
+                category=row['category'],
+                match_score=row['match_score']
             )
-            for row in rows
-        ]
+            deals.append(deal)
         
-        # Filter to hot deals only
+        # Get trending categories
         detector = HotDealDetector()
-        hot_deals = detector.filter_hot_deals(listings)
         
         return {
-            "deals": hot_deals[:20],  # Top 20
-            "total_count": len(hot_deals),
+            "deals": deals,
+            "total_count": len(deals),
             "trending_categories": detector.get_trending_categories()
         }
         
     except Exception as e:
         logger.error(f"Failed to get hot deals: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/deals/view")
+async def view_deal(url: str = Query(..., description="Facebook Marketplace listing URL")):
+    """
+    View and analyze a specific deal from a URL.
+    
+    This endpoint:
+    1. Scrapes the listing details from Facebook Marketplace
+    2. Analyzes it with eBay price data
+    3. Provides negotiation recommendations
+    4. Returns actionable next steps
+    
+    Example: POST /api/deals/view?url=https://facebook.com/marketplace/item/123456
+    """
+    try:
+        from src.services.enhanced_deal_viewer import EnhancedDealViewer
+        from src.services.browser import MarketplaceScraper
+        
+        logger.info(f"Viewing deal: {url}")
+        
+        # Scrape the listing
+        scraper = MarketplaceScraper()
+        listing_data = await scraper.scrape_single_listing(url)
+        
+        if not listing_data:
+            raise HTTPException(status_code=404, detail="Could not scrape listing from URL")
+        
+        # Analyze with eBay integration
+        viewer = EnhancedDealViewer()
+        result = await viewer.view_and_analyze_deal(
+            listing_data=listing_data,
+            use_ai=True,
+            min_rating=DealRating.FAIR
+        )
+        
+        logger.info(f"Deal analysis complete: {result['analysis']['rating']}")
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to view deal: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze deal: {str(e)}")

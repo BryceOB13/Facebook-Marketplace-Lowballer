@@ -1,8 +1,9 @@
 """Search data models"""
 
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Union
 from .listing import Listing
+from .deal import Deal
 
 
 class SearchQuery(BaseModel):
@@ -16,7 +17,7 @@ class SearchQuery(BaseModel):
 
 class SearchResult(BaseModel):
     """Search results with metadata"""
-    listings: List[Listing]
+    listings: List[Union[Listing, Deal]]  # Can return either listings or scored deals
     total_count: int
     query_variations: List[str] = []
     cached: bool = False

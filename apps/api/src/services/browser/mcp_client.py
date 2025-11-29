@@ -106,33 +106,73 @@ class ChromeMCPClient:
                     ws_url = target['webSocketDebuggerUrl']
                 
                 async with session.ws_connect(ws_url) as ws:
-                    # Enable Runtime
+                    # Enable Runtime and Console
                     await ws.send_json({
                         "id": 1,
                         "method": "Runtime.enable"
                     })
                     await ws.receive()
                     
-                    # Execute script
                     await ws.send_json({
                         "id": 2,
+                        "method": "Console.enable"
+                    })
+                    await ws.receive()
+                    
+                    # Execute script
+                    await ws.send_json({
+                        "id": 3,
                         "method": "Runtime.evaluate",
                         "params": {
                             "expression": script,
-                            "returnByValue": True
+                            "returnByValue": True,
+                            "awaitPromise": False
                         }
                     })
                     
-                    response = await ws.receive()
-                    result = json.loads(response.data)
+                    # Wait for result - skip context/console messages
+                    result = None
+                    max_messages = 20  # Read up to 20 messages
+                    
+                    for i in range(max_messages):
+                        try:
+                            response = await asyncio.wait_for(ws.receive(), timeout=3.0)
+                            data = json.loads(response.data)
+                            
+                            # Skip method messages (context, console, etc)
+                            if "method" in data:
+                                method = data.get("method")
+                                if method == "Runtime.consoleAPICalled":
+                                    # Log console output
+                                    args = data.get("params", {}).get("args", [])
+                                    if args:
+                                        logger.debug(f"Console: {args[0].get('value')}")
+                                continue
+                            
+                            # Check if this is our result
+                            if data.get("id") == 3:
+                                result = data
+                                break
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout waiting for message {i+1}/{max_messages}")
+                            break
+                        except Exception as e:
+                            logger.error(f"Error receiving message: {e}")
+                            break
+                    
+                    if not result:
+                        logger.error("No result received from script execution")
+                        return None
                     
                     if "error" in result:
                         logger.error(f"Script execution error: {result['error']}")
                         return None
                     
                     if "result" in result and "result" in result["result"]:
-                        return result["result"]["result"].get("value")
+                        value = result["result"]["result"].get("value")
+                        return value
                     
+                    logger.warning(f"Unexpected result format: {result}")
                     return None
                     
         except Exception as e:

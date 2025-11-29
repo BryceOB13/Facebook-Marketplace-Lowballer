@@ -14,6 +14,7 @@ class ListingBase(BaseModel):
     image_url: Optional[str] = None
     url: str
     seller_name: Optional[str] = None
+    description: Optional[str] = None
 
 
 class ListingCreate(ListingBase):

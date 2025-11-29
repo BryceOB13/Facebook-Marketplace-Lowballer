@@ -100,6 +100,38 @@ async def create_tables():
             )
         """)
         
+        # Deals table (scored listings)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS deals (
+                listing_id TEXT PRIMARY KEY REFERENCES listings(id),
+                ebay_avg_price INTEGER,
+                profit_estimate INTEGER,
+                roi_percent FLOAT,
+                deal_rating TEXT NOT NULL,
+                why_standout TEXT,
+                category TEXT,
+                match_score FLOAT,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        """)
+        
+        # Add description column to listings if it doesn't exist
+        try:
+            await conn.execute("""
+                ALTER TABLE listings ADD COLUMN description TEXT;
+            """)
+        except Exception:
+            pass  # Column already exists
+        
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_deals_rating ON deals(deal_rating);
+        """)
+        
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_deals_profit ON deals(profit_estimate);
+        """)
+        
         # Search history table
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS search_history (

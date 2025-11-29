@@ -46,20 +46,21 @@ class DealScorer:
             # Parse evaluation results
             rating = self._parse_rating(evaluation.get('rating', 'FAIR'))
             
-            # Create Deal object
-            return Deal(
-                **listing.model_dump(),
-                ebay_avg_price=evaluation.get('market_value'),
-                profit_estimate=evaluation.get('profit_estimate'),
-                roi_percent=evaluation.get('roi_percent'),
-                deal_rating=rating,
-                is_new=True,
-                price_changed=False,
-                old_price=None,
-                why_standout=evaluation.get('why_standout', 'Review details'),
-                category=evaluation.get('category'),
-                match_score=evaluation.get('score', 50) / 100.0
-            )
+            # Create Deal object - merge listing data with evaluation
+            listing_data = listing.model_dump()
+            listing_data.update({
+                'ebay_avg_price': evaluation.get('market_value'),
+                'profit_estimate': evaluation.get('profit_estimate'),
+                'roi_percent': evaluation.get('roi_percent'),
+                'deal_rating': rating,
+                'is_new': True,
+                'price_changed': False,
+                'old_price': None,
+                'why_standout': evaluation.get('why_standout', 'Review details'),
+                'category': evaluation.get('category'),
+                'match_score': evaluation.get('score', 50) / 100.0
+            })
+            return Deal(**listing_data)
             
         except Exception as e:
             logger.error(f"LLM evaluation failed: {e}")
@@ -136,17 +137,18 @@ Be realistic about market values. Consider condition, demand, and resale velocit
     
     def _create_neutral_deal(self, listing: Listing) -> Deal:
         """Create a neutral deal when LLM is unavailable"""
-        return Deal(
-            **listing.model_dump(),
-            ebay_avg_price=None,
-            profit_estimate=None,
-            roi_percent=None,
-            deal_rating=DealRating.FAIR,
-            is_new=True,
-            price_changed=False,
-            old_price=None,
-            why_standout="LLM evaluation unavailable",
-            category=None,
-            match_score=0.5
-        )
+        listing_data = listing.model_dump()
+        listing_data.update({
+            'ebay_avg_price': None,
+            'profit_estimate': None,
+            'roi_percent': None,
+            'deal_rating': DealRating.FAIR,
+            'is_new': True,
+            'price_changed': False,
+            'old_price': None,
+            'why_standout': "LLM evaluation unavailable",
+            'category': None,
+            'match_score': 0.5
+        })
+        return Deal(**listing_data)
 

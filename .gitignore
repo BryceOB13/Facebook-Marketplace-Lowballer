@@ -85,3 +85,25 @@ logs/
 demo_search.py
 microphone_search.log
 QUICK_START.md
+demo-view-deal.html
+EBAY_INTEGRATION_SUMMARY.md
+QUICK_START_VIEW_DEAL.md
+VIEW_DEAL_WORKING.md
+
+# Large API specs (reference from source instead)
+buy_browse_v1_oas3.json
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+
+# Test files
+test_*.py
+*_test.py
