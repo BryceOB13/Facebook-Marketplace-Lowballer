@@ -1,5 +1,6 @@
 """
-Listing extraction from Facebook Marketplace pages.
+Listing extraction from Facebook Marketplace pages - OPTIMIZED VERSION
+Single DOM query for all listings with metadata tracking.
 """
 
 import re
@@ -13,67 +14,59 @@ logger = logging.getLogger(__name__)
 
 
 class ListingExtractor:
-    """Extract listing data from Facebook Marketplace HTML"""
+    """Optimized listing extraction with single DOM query."""
     
-    # JavaScript extraction script - updated for current Facebook Marketplace structure
+    # Optimized extraction script - single pass, returns JSON with metadata
     EXTRACTION_SCRIPT = """
     (function() {
+        const startTime = performance.now();
         const listings = [];
+        const seenIds = new Set();
         
-        // Facebook uses multiple possible selectors
+        // Get all marketplace item links in single query
         const links = document.querySelectorAll('a[href*="/marketplace/item/"]');
-        
-        console.log('Found ' + links.length + ' marketplace links');
         
         links.forEach((link, index) => {
             try {
                 // Extract ID from URL
                 const match = link.href.match(/\\/marketplace\\/item\\/(\\d+)/);
-                if (!match) return;
+                if (!match || seenIds.has(match[1])) return;
+                seenIds.add(match[1]);
                 
                 const id = match[1];
                 
-                // Find parent container
-                let container = link.closest('div[class*="x1"]');
-                if (!container) {
-                    container = link.parentElement?.parentElement?.parentElement;
-                }
-                if (!container) {
-                    container = link;
+                // Find parent container - traverse up max 5 levels
+                let container = link;
+                for (let i = 0; i < 5 && container.parentElement; i++) {
+                    container = container.parentElement;
+                    if (container.querySelector('img') && container.textContent.includes('$')) break;
                 }
                 
-                // Extract title from aria-label (most reliable)
+                // Extract title from aria-label first (most reliable)
                 let title = link.getAttribute('aria-label') || '';
                 title = title.trim();
                 
-                // If aria-label is too long or contains price, it's not the title
+                // If aria-label contains price or is too long, clear it
                 if (title.includes('$') || title.length > 100) {
                     title = '';
                 }
                 
-                // Fallback: get first span with meaningful text
+                // Fallback: find best span text
                 if (!title) {
                     const spans = container.querySelectorAll('span');
                     for (const span of spans) {
                         const text = span.textContent.trim();
                         
-                        // Skip time indicators (1d, 18h, 2w, etc.)
+                        // Skip unwanted patterns
                         const isTimeIndicator = /^\\d+[hdwm]/.test(text);
-                        
-                        // Skip badges and status text
                         const isBadge = text.includes('Price dropped') || 
                                        text.includes('Pending') || 
                                        text.includes('Sold') || 
                                        text.includes('Free') ||
                                        text.includes('·');
-                        
-                        // Skip prices
                         const isPrice = text.includes('$');
-                        
-                        // Skip locations (City, ST pattern)
                         const isLocation = text.includes(',') && text.length < 25;
                         
-                        // Valid title: reasonable length, not a special element
                         if (text.length > 5 && text.length < 100 && 
                             !isPrice && !isLocation && !isTimeIndicator && !isBadge) {
                             title = text;
@@ -82,19 +75,18 @@ class ListingExtractor:
                     }
                 }
                 
-                // Extract price
+                // Extract price - first $ pattern
                 let price = '';
                 const priceMatch = container.textContent.match(/\\$[\\d,]+/);
                 if (priceMatch) {
                     price = priceMatch[0];
                 }
                 
-                // Extract location - look for city, state pattern
+                // Extract location
                 let location = '';
                 const allSpans = container.querySelectorAll('span');
                 for (const span of allSpans) {
                     const text = span.textContent.trim();
-                    // Look for "City, State" or "X miles away"
                     if ((text.match(/^[A-Z][a-z]+,\\s*[A-Z]{2}$/) || text.includes('miles')) && text !== title) {
                         location = text;
                         break;
@@ -107,7 +99,6 @@ class ListingExtractor:
                 if (img) {
                     imageUrl = img.src || img.getAttribute('data-src') || '';
                 }
-
                 
                 // Only add if we have minimum required data
                 if (id && title && title.length > 2) {
@@ -123,48 +114,32 @@ class ListingExtractor:
                     });
                 }
             } catch (e) {
-                console.error('Error extracting listing ' + index + ':', e);
+                // Skip failed extractions silently
             }
         });
         
-        console.log('Extracted ' + listings.length + ' listings');
         return listings;
     })()
     """
+
     
     def parse_price_value(self, price_str: str) -> Optional[int]:
-        """
-        Extract numeric value from price string.
-        
-        Args:
-            price_str: Price string like "$1,200" or "$50"
-            
-        Returns:
-            Integer price value or None
-        """
+        """Extract numeric value from price string."""
         if not price_str:
             return None
         
         # Remove $ and commas, extract numbers
-        match = re.search(r'[\d,]+', price_str.replace('$', ''))
+        clean = price_str.replace('$', '').replace(',', '')
+        match = re.search(r'\d+', clean)
         if match:
             try:
-                return int(match.group().replace(',', ''))
+                return int(match.group())
             except ValueError:
                 return None
-        
         return None
     
     def create_listing_from_data(self, data: dict) -> Listing:
-        """
-        Create Listing object from extracted data.
-        
-        Args:
-            data: Dictionary with listing data
-            
-        Returns:
-            Listing object
-        """
+        """Create Listing object from extracted data."""
         price_value = self.parse_price_value(data.get('price', ''))
         
         return Listing(
@@ -181,15 +156,7 @@ class ListingExtractor:
         )
     
     def extract_from_script_result(self, script_result: List[dict]) -> List[Listing]:
-        """
-        Convert JavaScript extraction result to Listing objects.
-        
-        Args:
-            script_result: List of dicts from JavaScript extraction
-            
-        Returns:
-            List of Listing objects
-        """
+        """Convert JavaScript extraction result to Listing objects."""
         listings = []
         
         if not script_result:
