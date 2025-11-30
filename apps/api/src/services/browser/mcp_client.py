@@ -53,13 +53,13 @@ class ChromeMCPClient:
                     ws_url = target['webSocketDebuggerUrl']
                 
                 # Connect to WebSocket and send navigation command
-                async with session.ws_connect(ws_url) as ws:
+                async with session.ws_connect(ws_url, timeout=30) as ws:
                     # Enable Page domain
                     await ws.send_json({
                         "id": 1,
                         "method": "Page.enable"
                     })
-                    await ws.receive()
+                    await asyncio.wait_for(ws.receive(), timeout=10)
                     
                     # Navigate
                     await ws.send_json({
@@ -68,8 +68,8 @@ class ChromeMCPClient:
                         "params": {"url": url}
                     })
                     
-                    # Wait for response
-                    response = await ws.receive()
+                    # Wait for response with timeout
+                    response = await asyncio.wait_for(ws.receive(), timeout=15)
                     result = json.loads(response.data)
                     
                     if "error" in result:
@@ -83,6 +83,9 @@ class ChromeMCPClient:
                     logger.info(f"Successfully navigated to {url}")
                     return True
                     
+        except asyncio.TimeoutError:
+            logger.error(f"Navigation timed out for {url}")
+            return False
         except Exception as e:
             logger.error(f"Navigation failed: {e}")
             return False
@@ -105,19 +108,19 @@ class ChromeMCPClient:
                     target = next((t for t in targets if t['type'] == 'page'), targets[0])
                     ws_url = target['webSocketDebuggerUrl']
                 
-                async with session.ws_connect(ws_url) as ws:
+                async with session.ws_connect(ws_url, timeout=30) as ws:
                     # Enable Runtime and Console
                     await ws.send_json({
                         "id": 1,
                         "method": "Runtime.enable"
                     })
-                    await ws.receive()
+                    await asyncio.wait_for(ws.receive(), timeout=10)
                     
                     await ws.send_json({
                         "id": 2,
                         "method": "Console.enable"
                     })
-                    await ws.receive()
+                    await asyncio.wait_for(ws.receive(), timeout=10)
                     
                     # Execute script
                     await ws.send_json({

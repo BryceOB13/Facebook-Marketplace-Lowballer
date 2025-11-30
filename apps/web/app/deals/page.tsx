@@ -127,13 +127,13 @@ export default function DealsPage() {
                   )}
                 </div>
 
-                {deal.profit_estimate && (
+                {deal.profit_estimate !== undefined && deal.profit_estimate !== null && (
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-green-500 font-semibold">
-                      +{formatPrice(deal.profit_estimate)} profit
+                    <span className={`font-semibold ${deal.profit_estimate >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                      {deal.profit_estimate >= 0 ? '+' : ''}{formatPrice(deal.profit_estimate)} profit
                     </span>
-                    {deal.roi_percent && (
-                      <span className="text-muted-foreground">
+                    {deal.roi_percent !== undefined && deal.roi_percent !== null && (
+                      <span className={`${deal.roi_percent >= 0 ? 'text-muted-foreground' : 'text-red-500'}`}>
                         {deal.roi_percent.toFixed(0)}% ROI
                       </span>
                     )}

@@ -153,11 +153,12 @@ class DealAnalyzer:
                 comparable_items=comparable_items[:10]
             )
             
-            # Adjust score based on AI insights
-            final_score = (base_score * 0.7) + (ai_insights["score"] * 0.3)
+            # Adjust score based on AI insights - clamp AI score to 0-100 first
+            ai_score = max(0, min(ai_insights.get("score", 50), 100))
+            final_score = max(0, min((base_score * 0.7) + (ai_score * 0.3), 100))
             reason = ai_insights["reasoning"]
         else:
-            final_score = base_score
+            final_score = max(0, min(base_score, 100))
             # Use dynamic analysis based on actual data
             reason = self._generate_dynamic_analysis(
                 listing_title=listing_title,
@@ -168,8 +169,8 @@ class DealAnalyzer:
                 profit_analysis=profit_analysis
             )
         
-        # Determine rating
-        rating = self._score_to_rating(final_score)
+        # Determine rating (pass profit to ensure negative profit = PASS)
+        rating = self._score_to_rating(final_score, profit_analysis["net_profit"])
         
         # Build reason with bundle info if applicable
         if accessory_values:
@@ -185,7 +186,7 @@ class DealAnalyzer:
             "confidence": self._calculate_confidence(ebay_stats["sample_size"]),
             "reason": reason,
             "comparable_count": len(comparable_items),
-            "score": round(final_score, 2),
+            "score": round(max(0, min(final_score, 100)), 2),  # Ensure 0-100
             "bundle_value": total_market_value,
             "primary_item_value": ebay_median,
             "accessories": accessory_values
@@ -238,6 +239,8 @@ class DealAnalyzer:
         - ROI potential (30%)
         - Absolute profit (20%)
         - Market data confidence (10%)
+        
+        Returns: Score normalized to 0-100 (never negative)
         """
         # Price discount score (0-100) - clamp to valid range
         if ebay_median > 0:
@@ -250,12 +253,12 @@ class DealAnalyzer:
         roi = profit_analysis["roi"]
         roi_score = max(0, min(roi, 100))  # Clamp 0-100
         
-        # Profit score (0-100)
+        # Profit score (0-100) - clamp to 0 minimum
         profit = profit_analysis["net_profit"]
-        profit_score = min((profit / 50) * 100, 100)  # $50 profit = 100 points
+        profit_score = max(0, min((profit / 50) * 100, 100))  # $50 profit = 100 points, min 0
         
         # Confidence score based on sample size
-        confidence_score = min((sample_size / 20) * 100, 100)  # 20+ items = 100 points
+        confidence_score = max(0, min((sample_size / 20) * 100, 100))  # 20+ items = 100 points
         
         # Weighted total
         total_score = (
@@ -265,10 +268,15 @@ class DealAnalyzer:
             confidence_score * 0.10
         )
         
-        return total_score
+        # Final clamp to ensure 0-100 range
+        return max(0, min(total_score, 100))
     
-    def _score_to_rating(self, score: float) -> DealRating:
-        """Convert numeric score to rating"""
+    def _score_to_rating(self, score: float, profit: float = 0) -> DealRating:
+        """Convert numeric score to rating. Negative profit always results in PASS."""
+        # Hard rule: negative profit = PASS, regardless of score
+        if profit < 0:
+            return DealRating.PASS
+        
         if score >= 80:
             return DealRating.HOT
         elif score >= 60:

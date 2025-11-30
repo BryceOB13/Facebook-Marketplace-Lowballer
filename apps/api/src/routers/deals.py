@@ -222,18 +222,34 @@ async def view_deal(url: str = Query(..., description="Facebook Marketplace list
     View and analyze a specific deal from a URL.
     
     This endpoint:
-    1. Scrapes the listing details from Facebook Marketplace
-    2. Analyzes it with eBay price data
-    3. Provides negotiation recommendations
-    4. Returns actionable next steps
+    1. Checks Redis cache for previous analysis (1 hour TTL)
+    2. If not cached, scrapes the listing details from Facebook Marketplace
+    3. Analyzes it with eBay price data
+    4. Caches the result for 1 hour
+    5. Returns actionable next steps
     
     Example: POST /api/deals/view?url=https://facebook.com/marketplace/item/123456
     """
+    import json
+    import hashlib
+    from src.db import get_redis
+    
     try:
         from src.services.enhanced_deal_viewer import EnhancedDealViewer
         from src.services.browser import MarketplaceScraper
         
         logger.info(f"Viewing deal: {url}")
+        
+        # Check Redis cache first
+        cache_key = f"deal_view:{hashlib.md5(url.encode()).hexdigest()}"
+        try:
+            redis_client = get_redis()
+            cached = await redis_client.get(cache_key)
+            if cached:
+                logger.info(f"Cache hit for deal: {url}")
+                return json.loads(cached)
+        except Exception as e:
+            logger.warning(f"Redis cache check failed: {e}")
         
         # Scrape the listing
         scraper = MarketplaceScraper()
@@ -251,6 +267,18 @@ async def view_deal(url: str = Query(..., description="Facebook Marketplace list
         )
         
         logger.info(f"Deal analysis complete: {result['analysis']['rating']}")
+        
+        # Cache the result for 1 hour
+        try:
+            # Convert DealRating enum to string for JSON serialization
+            cache_result = result.copy()
+            if 'analysis' in cache_result and 'rating' in cache_result['analysis']:
+                if hasattr(cache_result['analysis']['rating'], 'value'):
+                    cache_result['analysis']['rating'] = cache_result['analysis']['rating'].value
+            await redis_client.setex(cache_key, 3600, json.dumps(cache_result))
+            logger.info(f"Cached deal analysis for 1 hour: {url}")
+        except Exception as e:
+            logger.warning(f"Failed to cache deal analysis: {e}")
         
         return result
         

@@ -107,3 +107,9 @@ package-lock.json
 # Test files
 test_*.py
 *_test.py
+
+# Backup and temp files
+*.backup
+*_old.py
+KIRO_SPEC_*.md
+demo-*.html

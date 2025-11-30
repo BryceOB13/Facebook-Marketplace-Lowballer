@@ -60,22 +60,41 @@ class EbayBrowseClient:
         self.token_expires_at: Optional[datetime] = None
         self._session: Optional[aiohttp.ClientSession] = None
         
-        # Cache for search results (1 hour TTL)
+        # In-memory cache for search results (1 hour TTL)
         self._search_cache: Dict[str, tuple[datetime, List[EbayItem]]] = {}
         
+        # Redis cache TTL (1 hour for eBay data)
+        self.REDIS_CACHE_TTL = 3600
+        
     async def __aenter__(self):
-        self._session = aiohttp.ClientSession()
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._session:
+        # Don't close session here - let it be reused
+        # Session will be closed when the client is garbage collected
+        pass
+    
+    async def close(self):
+        """Explicitly close the session when done"""
+        if self._session and not self._session.closed:
             await self._session.close()
+            self._session = None
+    
+    async def _ensure_session(self):
+        """Ensure we have an open session"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
     
     async def _ensure_token(self):
         """Ensure we have a valid OAuth token"""
         if self.access_token and self.token_expires_at:
             if datetime.now() < self.token_expires_at:
                 return
+        
+        # Ensure session exists
+        await self._ensure_session()
         
         # Get new token
         auth = aiohttp.BasicAuth(self.client_id, self.client_secret)
@@ -220,6 +239,7 @@ class EbayBrowseClient:
     ) -> Dict[str, float]:
         """
         Get price statistics for a query (avg, median, min, max).
+        Uses Redis caching to avoid repeated eBay API calls.
         
         Args:
             query: Search query
@@ -231,7 +251,25 @@ class EbayBrowseClient:
             Dict with avg_price, median_price, min_price, max_price, sample_size, items
         """
         import logging
+        import hashlib
         logger = logging.getLogger(__name__)
+        
+        # Check Redis cache first
+        cache_key = f"ebay_stats:{hashlib.md5(f'{query}:{condition}:{reference_price}'.encode()).hexdigest()}"
+        try:
+            from src.db import get_redis
+            redis_client = get_redis()
+            cached = await redis_client.get(cache_key)
+            if cached:
+                logger.info(f"[EBAY CACHE HIT] Query: '{query}'")
+                cached_data = json.loads(cached)
+                # Reconstruct EbayItem objects
+                cached_data["items"] = [
+                    EbayItem(**item) for item in cached_data.get("items_data", [])
+                ]
+                return cached_data
+        except Exception as e:
+            logger.warning(f"Redis cache check failed: {e}")
         
         logger.info(f"[EBAY SEARCH] Query: '{query}', Condition: {condition}, Reference: ${reference_price or 0:.0f}")
         
@@ -343,7 +381,7 @@ class EbayBrowseClient:
         
         logger.info(f"[EBAY SEARCH] Avg: ${avg_price:.2f}, Median: ${median_price:.2f}")
         
-        return {
+        result = {
             "avg_price": avg_price,
             "median_price": median_price,
             "min_price": prices[0],
@@ -351,6 +389,38 @@ class EbayBrowseClient:
             "sample_size": len(prices),
             "items": items  # Return items for analysis
         }
+        
+        # Cache result in Redis for 1 hour
+        try:
+            from src.db import get_redis
+            redis_client = get_redis()
+            # Store items as dicts for JSON serialization
+            cache_data = {
+                **result,
+                "items_data": [
+                    {
+                        "item_id": item.item_id,
+                        "title": item.title,
+                        "price": item.price,
+                        "currency": item.currency,
+                        "condition": item.condition,
+                        "image_url": item.image_url,
+                        "item_url": item.item_url,
+                        "seller_username": item.seller_username,
+                        "seller_feedback_score": item.seller_feedback_score,
+                        "shipping_cost": item.shipping_cost,
+                        "location": item.location
+                    }
+                    for item in items[:20]  # Cache top 20 items
+                ]
+            }
+            del cache_data["items"]  # Remove non-serializable items list
+            await redis_client.setex(cache_key, self.REDIS_CACHE_TTL, json.dumps(cache_data))
+            logger.info(f"[EBAY CACHE] Cached stats for '{query}' (1 hour TTL)")
+        except Exception as e:
+            logger.warning(f"Failed to cache eBay stats: {e}")
+        
+        return result
     
     async def find_comparable_items(
         self,

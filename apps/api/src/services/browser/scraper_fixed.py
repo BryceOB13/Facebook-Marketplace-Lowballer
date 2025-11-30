@@ -2,7 +2,7 @@
 Facebook Marketplace scraper - FIXED VERSION with improved extraction.
 """
 
-SINGLE_LISTING_EXTRACTION_SCRIPT = """
+SINGLE_LISTING_EXTRACTION_SCRIPT = r"""
 (function() {
     try {
         const bodyText = document.body.innerText;
@@ -29,27 +29,10 @@ SINGLE_LISTING_EXTRACTION_SCRIPT = """
             }
         }
         
-        // Method 3: Large font spans
-        if (!title) {
-            const spans = document.querySelectorAll('span');
-            for (const span of spans) {
-                const text = span.innerText.trim();
-                if (text.length > 10 && text.length < 200 && 
-                    !text.includes('$') && !text.includes('Message') &&
-                    !text.includes('Share') && !text.includes('Save')) {
-                    const style = window.getComputedStyle(span);
-                    const fontSize = parseFloat(style.fontSize);
-                    if (fontSize > 20) {
-                        title = text;
-                        break;
-                    }
-                }
-            }
-        }
-        
         // ===== PRICE EXTRACTION =====
         let priceText = '';
         let price = 0;
+        let originalPrice = 0;
         
         // Method 1: Meta tag
         const ogPrice = document.querySelector('meta[property="product:price:amount"]');
@@ -58,26 +41,25 @@ SINGLE_LISTING_EXTRACTION_SCRIPT = """
             priceText = '$' + price.toLocaleString();
         }
         
-        // Method 2: Find all price-formatted spans, take the most prominent
+        // Method 2: Find the FIRST price on the page
+        // Facebook shows current price first, then strikethrough original price
         if (price === 0) {
-            const allSpans = document.querySelectorAll('span');
-            const priceSpans = [];
-            
-            for (const span of allSpans) {
-                const text = span.innerText.trim();
-                if (/^\$[\d,]+$/.test(text)) {
-                    const numVal = parseFloat(text.replace(/[$,]/g, ''));
-                    if (numVal > 0 && numVal < 1000000) {
-                        const fontSize = parseFloat(window.getComputedStyle(span).fontSize);
-                        priceSpans.push({ value: numVal, text: text, fontSize: fontSize });
+            const allPrices = bodyText.match(/\$[\d,]+/g) || [];
+            if (allPrices.length > 0) {
+                const firstPrice = parseFloat(allPrices[0].replace(/[$,]/g, ''));
+                
+                if (allPrices.length > 1) {
+                    const secondPrice = parseFloat(allPrices[1].replace(/[$,]/g, ''));
+                    if (secondPrice > firstPrice && secondPrice < firstPrice * 3) {
+                        price = firstPrice;
+                        originalPrice = secondPrice;
+                    } else {
+                        price = firstPrice;
                     }
+                } else {
+                    price = firstPrice;
                 }
-            }
-            
-            if (priceSpans.length > 0) {
-                priceSpans.sort((a, b) => b.fontSize - a.fontSize);
-                price = priceSpans[0].value;
-                priceText = priceSpans[0].text;
+                priceText = '$' + price.toLocaleString();
             }
         }
         
@@ -111,11 +93,6 @@ SINGLE_LISTING_EXTRACTION_SCRIPT = """
         const locationMatch = bodyText.match(/in ([A-Za-z\s]+, [A-Z]{2})/);
         if (locationMatch) {
             location = locationMatch[1];
-        } else {
-            const locMatch = bodyText.match(/([A-Za-z\s]+, [A-Z]{2})\s*Location is approximate/);
-            if (locMatch) {
-                location = locMatch[1];
-            }
         }
         
         // ===== IMAGE EXTRACTION =====

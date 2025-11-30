@@ -13,8 +13,9 @@ export default function SearchPage() {
   const [result, setResult] = useState<SearchResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null)
+  const [selectedDeal, setSelectedDeal] = useState<any | null>(null)
   const [dealLoading, setDealLoading] = useState(false)
+  const [dealError, setDealError] = useState<string | null>(null)
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault()
@@ -40,11 +41,15 @@ export default function SearchPage() {
 
   async function handleViewDeal(listing: Listing) {
     setDealLoading(true)
+    setDealError(null)
+    setSelectedDeal({ loading: true, listing })
     try {
-      const deal = await api.getDeal(listing.id)
-      setSelectedDeal(deal as Deal)
+      const result = await api.viewDeal(listing.url)
+      setSelectedDeal({ ...result, listing })
     } catch (err) {
-      console.error('Failed to load deal:', err)
+      console.error('Failed to analyze deal:', err)
+      setDealError(err instanceof Error ? err.message : 'Failed to analyze deal')
+      setSelectedDeal(null)
     } finally {
       setDealLoading(false)
     }
@@ -225,12 +230,22 @@ export default function SearchPage() {
         </div>
       )}
 
+      {/* Deal Error */}
+      {dealError && (
+        <div className="fixed bottom-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg z-50">
+          {dealError}
+          <button onClick={() => setDealError(null)} className="ml-2">×</button>
+        </div>
+      )}
+
       {/* Deal Modal */}
       {selectedDeal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-card border-b p-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold">{selectedDeal.title}</h2>
+              <h2 className="text-xl font-bold">
+                {selectedDeal.loading ? 'Analyzing Deal...' : selectedDeal.listing?.title || selectedDeal.analysis?.title}
+              </h2>
               <button
                 onClick={() => setSelectedDeal(null)}
                 className="text-muted-foreground hover:text-foreground text-2xl"
@@ -240,100 +255,137 @@ export default function SearchPage() {
             </div>
 
             <div className="p-6 space-y-6">
-              {/* Image */}
-              {selectedDeal.image_url && (
-                <div className="rounded-lg overflow-hidden bg-muted">
-                  <img 
-                    src={selectedDeal.image_url} 
-                    alt={selectedDeal.title}
-                    className="w-full h-auto max-h-96 object-cover"
-                  />
+              {/* Loading State */}
+              {selectedDeal.loading && (
+                <div className="text-center py-12">
+                  <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
+                  <p className="text-muted-foreground">Fetching eBay market data...</p>
                 </div>
               )}
 
-              {/* Pricing */}
-              <div className="rounded-lg border bg-background p-4">
-                <h3 className="font-semibold mb-3">Pricing</h3>
-                <div className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Listed Price</span>
-                    <span className="font-semibold text-base">{selectedDeal.price}</span>
-                  </div>
-                  {selectedDeal.ebay_avg_price && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Market Value</span>
-                      <span className="font-semibold text-base">{formatPrice(selectedDeal.ebay_avg_price)}</span>
+              {/* Analysis Results */}
+              {!selectedDeal.loading && selectedDeal.analysis && (
+                <>
+                  {/* Image */}
+                  {selectedDeal.listing?.image_url && (
+                    <div className="rounded-lg overflow-hidden bg-muted">
+                      <img 
+                        src={selectedDeal.listing.image_url} 
+                        alt={selectedDeal.listing.title}
+                        className="w-full h-auto max-h-96 object-cover"
+                      />
                     </div>
                   )}
-                  {selectedDeal.profit_estimate && (
-                    <div className="flex items-center justify-between pt-3 border-t">
-                      <span className="text-muted-foreground">Est. Profit</span>
-                      <span className="font-semibold text-base text-green-500">+{formatPrice(selectedDeal.profit_estimate)}</span>
-                    </div>
-                  )}
-                  {selectedDeal.roi_percent && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">ROI</span>
-                      <span className="font-semibold text-base text-green-500">{selectedDeal.roi_percent.toFixed(1)}%</span>
-                    </div>
-                  )}
-                </div>
-              </div>
 
-              {/* Deal Rating */}
-              <div className="rounded-lg border bg-background p-4">
-                <h3 className="font-semibold mb-3">Deal Rating</h3>
-                <div className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Rating</span>
-                    <span className={`px-2 py-1 text-xs font-bold rounded ${
-                      selectedDeal.deal_rating === 'HOT' ? 'bg-red-500 text-white' :
-                      selectedDeal.deal_rating === 'GOOD' ? 'bg-green-500 text-white' :
+                  {/* Rating Badge */}
+                  <div className="flex items-center gap-3">
+                    <span className={`px-3 py-1 text-sm font-bold rounded ${
+                      selectedDeal.analysis.rating === 'HOT' ? 'bg-red-500 text-white' :
+                      selectedDeal.analysis.rating === 'GOOD' ? 'bg-green-500 text-white' :
+                      selectedDeal.analysis.rating === 'FAIR' ? 'bg-yellow-500 text-white' :
                       'bg-gray-500 text-white'
                     }`}>
-                      {selectedDeal.deal_rating}
+                      {selectedDeal.analysis.rating}
                     </span>
+                    <span className="text-muted-foreground">Score: {selectedDeal.analysis.score?.toFixed(1)}/100</span>
+                    <span className="text-muted-foreground">Confidence: {selectedDeal.analysis.confidence}</span>
                   </div>
-                  {selectedDeal.match_score && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Match Score</span>
-                      <span className="font-semibold text-base">{(selectedDeal.match_score * 100).toFixed(0)}%</span>
-                    </div>
-                  )}
-                  {selectedDeal.category && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Category</span>
-                      <span className="font-semibold text-base">{selectedDeal.category}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
 
-              {/* Why Standout */}
-              {selectedDeal.why_standout && (
-                <div className="rounded-lg border bg-background p-4">
-                  <h3 className="font-semibold mb-2">Why It Stands Out</h3>
-                  <p className="text-sm text-muted-foreground">{selectedDeal.why_standout}</p>
-                </div>
+                  {/* Pricing from eBay */}
+                  <div className="rounded-lg border bg-background p-4">
+                    <h3 className="font-semibold mb-3">💰 eBay Market Analysis</h3>
+                    <div className="space-y-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Listed Price</span>
+                        <span className="font-semibold text-base">{selectedDeal.listing?.price || `$${selectedDeal.analysis?.listing?.price}`}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">eBay Avg Price</span>
+                        <span className="font-semibold text-base">${selectedDeal.analysis.ebay_avg_price?.toFixed(0)}</span>
+                      </div>
+                      <div className="flex items-center justify-between pt-3 border-t">
+                        <span className="text-muted-foreground">Est. Profit</span>
+                        <span className={`font-semibold text-base ${selectedDeal.analysis.profit_estimate > 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {selectedDeal.analysis.profit_estimate > 0 ? '+' : ''}${selectedDeal.analysis.profit_estimate?.toFixed(0)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">ROI</span>
+                        <span className={`font-semibold text-base ${selectedDeal.analysis.roi_percent > 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {selectedDeal.analysis.roi_percent?.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Analysis Reason */}
+                  <div className="rounded-lg border bg-background p-4">
+                    <h3 className="font-semibold mb-2">📊 Analysis</h3>
+                    <p className="text-sm text-muted-foreground">{selectedDeal.analysis.reason}</p>
+                  </div>
+
+                  {/* Negotiation Strategy */}
+                  {selectedDeal.negotiation_strategy && (
+                    <div className="rounded-lg border bg-blue-500/10 p-4">
+                      <h3 className="font-semibold mb-3">🎯 Negotiation Strategy</h3>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span>Initial Offer</span>
+                          <span className="font-semibold">${selectedDeal.negotiation_strategy.initial_offer?.toFixed(0)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Target Price</span>
+                          <span className="font-semibold">${selectedDeal.negotiation_strategy.target_price?.toFixed(0)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Walk Away Above</span>
+                          <span className="font-semibold">${selectedDeal.negotiation_strategy.walk_away_price?.toFixed(0)}</span>
+                        </div>
+                        {selectedDeal.negotiation_strategy.talking_points?.length > 0 && (
+                          <div className="pt-2 border-t mt-2">
+                            <p className="font-medium mb-1">Talking Points:</p>
+                            <ul className="list-disc list-inside text-muted-foreground">
+                              {selectedDeal.negotiation_strategy.talking_points.map((point: string, i: number) => (
+                                <li key={i}>{point}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Items */}
+                  {selectedDeal.action_items?.length > 0 && (
+                    <div className="rounded-lg border bg-background p-4">
+                      <h3 className="font-semibold mb-3">📋 Next Steps</h3>
+                      <div className="space-y-2">
+                        {selectedDeal.action_items.map((item: string, i: number) => (
+                          <div key={i} className="text-sm p-2 bg-muted rounded">{item}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex gap-3">
+                    <a
+                      href={selectedDeal.listing?.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/90 text-center font-semibold text-sm"
+                    >
+                      View on Facebook
+                    </a>
+                    <button
+                      onClick={() => setSelectedDeal(null)}
+                      className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 font-semibold text-sm"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </>
               )}
-
-              {/* Actions */}
-              <div className="flex gap-3">
-                <a
-                  href={selectedDeal.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/90 text-center font-semibold text-sm"
-                >
-                  View on Facebook
-                </a>
-                <button
-                  onClick={() => setSelectedDeal(null)}
-                  className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 font-semibold text-sm"
-                >
-                  Close
-                </button>
-              </div>
             </div>
           </div>
         </div>

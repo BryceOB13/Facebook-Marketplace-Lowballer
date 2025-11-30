@@ -62,106 +62,174 @@ async def search_marketplace(query: SearchQuery):
         unique_listings = orchestrator.deduplicate_listings(all_listings)
         logger.info(f"Deduplicated to {len(unique_listings)} unique listings")
         
-        # Pre-filter: only score listings with valid prices
-        scorable_listings = [
+        # Score listings using eBay price comparison
+        from src.services.ebay import DealAnalyzer
+        from src.services.reseller import HotDealDetector
+        from src.models import Deal, DealRating
+        
+        # Check database for existing analyzed deals (avoid re-analyzing)
+        pool = get_pg_pool()
+        listing_ids = [l.id for l in unique_listings]
+        existing_deals = {}
+        
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT l.*, d.ebay_avg_price, d.profit_estimate, d.roi_percent,
+                       d.deal_rating, d.why_standout, d.category, d.match_score
+                FROM listings l
+                JOIN deals d ON l.id = d.listing_id
+                WHERE l.id = ANY($1)
+            """, listing_ids)
+            
+            for row in rows:
+                existing_deals[row['id']] = Deal(
+                    id=row['id'],
+                    title=row['title'],
+                    price=row['price'],
+                    price_value=row['price_value'],
+                    location=row['location'],
+                    image_url=row['image_url'],
+                    url=row['url'],
+                    seller_name=row['seller_name'],
+                    scraped_at=row['scraped_at'],
+                    created_at=row['created_at'],
+                    ebay_avg_price=row['ebay_avg_price'],
+                    profit_estimate=row['profit_estimate'],
+                    roi_percent=row['roi_percent'],
+                    deal_rating=DealRating(row['deal_rating']),
+                    is_new=False,
+                    price_changed=False,
+                    old_price=None,
+                    why_standout=row['why_standout'],
+                    category=row['category'],
+                    match_score=row['match_score']
+                )
+        
+        logger.info(f"Found {len(existing_deals)} existing analyzed deals in database")
+        
+        # Filter to listings that need analysis
+        listings_to_analyze = [
             l for l in unique_listings 
-            if l.price_value and l.price_value > 0
+            if l.id not in existing_deals and l.price_value and l.price_value > 0
         ]
         
-        # Limit to top 15 listings to keep it fast (each takes ~1-2 seconds)
-        max_to_score = 15
-        if len(scorable_listings) > max_to_score:
-            logger.info(f"Limiting scoring to {max_to_score} out of {len(scorable_listings)} listings")
-            scorable_listings = scorable_listings[:max_to_score]
-        
-        # Score listings in parallel
-        from src.services.reseller import DealScorer, HotDealDetector
-        import asyncio
-        
-        scorer = DealScorer()
+        # Limit new analyses to keep it fast
+        max_to_score = 10
+        if len(listings_to_analyze) > max_to_score:
+            logger.info(f"Limiting new analyses to {max_to_score} out of {len(listings_to_analyze)} listings")
+            listings_to_analyze = listings_to_analyze[:max_to_score]
+        analyzer = DealAnalyzer()
         hot_deal_detector = HotDealDetector()
         
-        # Score in batches of 5 to avoid rate limits
-        batch_size = 5
-        deals = []
+        # Start with existing deals from database
+        deals = list(existing_deals.values())
+        logger.info(f"Starting with {len(deals)} cached deals from database")
         
-        for i in range(0, len(scorable_listings), batch_size):
-            batch = scorable_listings[i:i+batch_size]
-            batch_deals = await asyncio.gather(
-                *[asyncio.to_thread(scorer.score_listing, listing) for listing in batch],
-                return_exceptions=True
-            )
-            
-            for deal in batch_deals:
-                if isinstance(deal, Exception):
-                    logger.error(f"Failed to score listing: {deal}")
-                else:
+        async def analyze_listing(listing):
+            """Analyze a single listing with eBay data"""
+            try:
+                analysis = await analyzer.analyze_deal(
+                    listing_title=listing.title,
+                    listing_price=listing.price_value,
+                    listing_condition="USED",
+                    listing_description=None,
+                    use_ai=True
+                )
+                
+                # Convert to Deal object
+                listing_data = listing.model_dump()
+                listing_data.update({
+                    'ebay_avg_price': analysis.get('ebay_avg_price'),
+                    'profit_estimate': analysis.get('profit_estimate'),
+                    'roi_percent': analysis.get('roi_percent'),
+                    'deal_rating': analysis.get('deal_rating', DealRating.FAIR),
+                    'is_new': True,
+                    'price_changed': False,
+                    'old_price': None,
+                    'why_standout': analysis.get('reason', ''),
+                    'category': analysis.get('category_hint', ''),
+                    'match_score': analysis.get('score', 50) / 100.0
+                })
+                return Deal(**listing_data)
+            except Exception as e:
+                logger.error(f"Failed to analyze listing {listing.id}: {e}")
+                return None
+        
+        # Only analyze NEW listings (not in database)
+        new_deals = []
+        for listing in listings_to_analyze:
+            try:
+                deal = await analyze_listing(listing)
+                if deal:
+                    new_deals.append(deal)
                     deals.append(deal)
+            except Exception as e:
+                logger.error(f"Failed to score listing: {e}")
         
-        logger.info(f"Scored {len(deals)} listings")
+        logger.info(f"Analyzed {len(new_deals)} new listings (total: {len(deals)})")
         
         # Filter to only hot/good deals
         hot_deals = hot_deal_detector.filter_hot_deals(deals)
         logger.info(f"Found {len(hot_deals)} hot/good deals out of {len(deals)} scored listings")
         
-        # Save to database
-        pool = get_pg_pool()
-        async with pool.acquire() as conn:
-            # Save all listings
-            for listing in unique_listings:
-                try:
-                    await conn.execute("""
-                        INSERT INTO listings (
-                            id, title, price, price_value, location,
-                            image_url, url, seller_name, scraped_at
+        # Save NEW data to database (skip existing)
+        if new_deals:
+            async with pool.acquire() as conn:
+                # Save new listings
+                for listing in listings_to_analyze:
+                    try:
+                        await conn.execute("""
+                            INSERT INTO listings (
+                                id, title, price, price_value, location,
+                                image_url, url, seller_name, scraped_at
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            ON CONFLICT (id) DO UPDATE
+                            SET scraped_at = EXCLUDED.scraped_at
+                        """,
+                            listing.id, listing.title, listing.price,
+                            listing.price_value, listing.location,
+                            listing.image_url, listing.url,
+                            listing.seller_name, listing.scraped_at
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                        ON CONFLICT (id) DO UPDATE
-                        SET scraped_at = EXCLUDED.scraped_at
-                    """,
-                        listing.id, listing.title, listing.price,
-                        listing.price_value, listing.location,
-                        listing.image_url, listing.url,
-                        listing.seller_name, listing.scraped_at
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to save listing {listing.id}: {e}")
-            
-            # Save scored deals
-            for deal in hot_deals:
-                try:
-                    await conn.execute("""
-                        INSERT INTO deals (
-                            listing_id, ebay_avg_price, profit_estimate, roi_percent,
-                            deal_rating, why_standout, category, match_score
+                    except Exception as e:
+                        logger.error(f"Failed to save listing {listing.id}: {e}")
+                
+                # Save new deals only
+                for deal in new_deals:
+                    try:
+                        await conn.execute("""
+                            INSERT INTO deals (
+                                listing_id, ebay_avg_price, profit_estimate, roi_percent,
+                                deal_rating, why_standout, category, match_score
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            ON CONFLICT (listing_id) DO UPDATE
+                            SET ebay_avg_price = EXCLUDED.ebay_avg_price,
+                                profit_estimate = EXCLUDED.profit_estimate,
+                                roi_percent = EXCLUDED.roi_percent,
+                                deal_rating = EXCLUDED.deal_rating,
+                                why_standout = EXCLUDED.why_standout,
+                                category = EXCLUDED.category,
+                                match_score = EXCLUDED.match_score
+                        """,
+                            deal.id, deal.ebay_avg_price, deal.profit_estimate,
+                            deal.roi_percent, deal.deal_rating.value,
+                            deal.why_standout, deal.category, deal.match_score
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        ON CONFLICT (listing_id) DO UPDATE
-                        SET ebay_avg_price = EXCLUDED.ebay_avg_price,
-                            profit_estimate = EXCLUDED.profit_estimate,
-                            roi_percent = EXCLUDED.roi_percent,
-                            deal_rating = EXCLUDED.deal_rating,
-                            why_standout = EXCLUDED.why_standout,
-                            category = EXCLUDED.category,
-                            match_score = EXCLUDED.match_score
-                    """,
-                        deal.id, deal.ebay_avg_price, deal.profit_estimate,
-                        deal.roi_percent, deal.deal_rating.value,
-                        deal.why_standout, deal.category, deal.match_score
+                    except Exception as e:
+                        logger.error(f"Failed to save deal {deal.id}: {e}")
+                
+                # Save search history
+                await conn.execute("""
+                    INSERT INTO search_history (
+                        query, min_price, max_price, location, results_count
                     )
-                except Exception as e:
-                    logger.error(f"Failed to save deal {deal.id}: {e}")
-            
-            # Save search history
-            await conn.execute("""
-                INSERT INTO search_history (
-                    query, min_price, max_price, location, results_count
+                    VALUES ($1, $2, $3, $4, $5)
+                """,
+                    query.query, query.min_price, query.max_price,
+                    query.location, len(unique_listings)
                 )
-                VALUES ($1, $2, $3, $4, $5)
-            """,
-                query.query, query.min_price, query.max_price,
-                query.location, len(unique_listings)
-            )
         
         # Create result with scored deals
         result = SearchResult(

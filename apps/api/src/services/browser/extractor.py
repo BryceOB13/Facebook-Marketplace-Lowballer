@@ -56,8 +56,26 @@ class ListingExtractor:
                     const spans = container.querySelectorAll('span');
                     for (const span of spans) {
                         const text = span.textContent.trim();
-                        // Skip if it's a price, location, or too short
-                        if (text.length > 5 && text.length < 100 && !text.includes('$') && !text.includes(',')) {
+                        
+                        // Skip time indicators (1d, 18h, 2w, etc.)
+                        const isTimeIndicator = /^\\d+[hdwm]/.test(text);
+                        
+                        // Skip badges and status text
+                        const isBadge = text.includes('Price dropped') || 
+                                       text.includes('Pending') || 
+                                       text.includes('Sold') || 
+                                       text.includes('Free') ||
+                                       text.includes('·');
+                        
+                        // Skip prices
+                        const isPrice = text.includes('$');
+                        
+                        // Skip locations (City, ST pattern)
+                        const isLocation = text.includes(',') && text.length < 25;
+                        
+                        // Valid title: reasonable length, not a special element
+                        if (text.length > 5 && text.length < 100 && 
+                            !isPrice && !isLocation && !isTimeIndicator && !isBadge) {
                             title = text;
                             break;
                         }
@@ -89,6 +107,7 @@ class ListingExtractor:
                 if (img) {
                     imageUrl = img.src || img.getAttribute('data-src') || '';
                 }
+
                 
                 // Only add if we have minimum required data
                 if (id && title && title.length > 2) {
