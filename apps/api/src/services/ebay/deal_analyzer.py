@@ -216,9 +216,13 @@ class DealAnalyzer:
         total_cost = purchase_price + purchase_tax + platform_fee + shipping_cost
         net_profit = expected_sale_price - total_cost
         
+        # Avoid division by zero for ROI calculation
+        investment = purchase_price + purchase_tax
+        roi = round((net_profit / investment) * 100, 2) if investment > 0 else 0
+        
         return {
             "net_profit": round(net_profit, 2),
-            "roi": round((net_profit / (purchase_price + purchase_tax)) * 100, 2),
+            "roi": roi,
             "break_even": round(total_cost, 2),
             "platform_fee": round(platform_fee, 2)
         }

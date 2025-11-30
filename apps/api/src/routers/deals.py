@@ -217,7 +217,10 @@ async def get_hot_deals():
 
 
 @router.post("/deals/view")
-async def view_deal(url: str = Query(..., description="Facebook Marketplace listing URL")):
+async def view_deal(
+    url: str = Query(..., description="Facebook Marketplace listing URL"),
+    price: Optional[float] = Query(None, description="Known listing price (optional fallback)")
+):
     """
     View and analyze a specific deal from a URL.
     
@@ -257,6 +260,12 @@ async def view_deal(url: str = Query(..., description="Facebook Marketplace list
         
         if not listing_data:
             raise HTTPException(status_code=404, detail="Could not scrape listing from URL")
+        
+        # Use provided price as fallback if scraper didn't get it
+        if price and (not listing_data.get('price_value') or listing_data.get('price_value') == 0):
+            listing_data['price_value'] = price
+            listing_data['price'] = f"${price:,.0f}"
+            logger.info(f"Using provided price fallback: ${price}")
         
         # Analyze with eBay integration
         viewer = EnhancedDealViewer()

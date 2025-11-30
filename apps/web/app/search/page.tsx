@@ -44,7 +44,8 @@ export default function SearchPage() {
     setDealError(null)
     setSelectedDeal({ loading: true, listing })
     try {
-      const result = await api.viewDeal(listing.url)
+      // Pass the known price as fallback for the backend
+      const result = await api.viewDeal(listing.url, listing.price_value)
       setSelectedDeal({ ...result, listing })
     } catch (err) {
       console.error('Failed to analyze deal:', err)

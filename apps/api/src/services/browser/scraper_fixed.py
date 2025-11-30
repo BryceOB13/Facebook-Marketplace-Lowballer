@@ -1,5 +1,5 @@
 """
-Facebook Marketplace scraper - FIXED VERSION with improved extraction.
+Facebook Marketplace single listing extraction script.
 """
 
 SINGLE_LISTING_EXTRACTION_SCRIPT = r"""
@@ -32,34 +32,42 @@ SINGLE_LISTING_EXTRACTION_SCRIPT = r"""
         // ===== PRICE EXTRACTION =====
         let priceText = '';
         let price = 0;
-        let originalPrice = 0;
         
-        // Method 1: Meta tag
+        // Method 1: Meta tag (most reliable)
         const ogPrice = document.querySelector('meta[property="product:price:amount"]');
         if (ogPrice) {
-            price = parseFloat(ogPrice.getAttribute('content') || '0');
-            priceText = '$' + price.toLocaleString();
+            const metaPrice = parseFloat(ogPrice.getAttribute('content') || '0');
+            if (metaPrice > 0) {
+                price = metaPrice;
+                priceText = '$' + price.toLocaleString();
+            }
         }
         
-        // Method 2: Find the FIRST price on the page
-        // Facebook shows current price first, then strikethrough original price
+        // Method 2: Look for price in specific Facebook elements
+        if (price === 0) {
+            // Facebook often puts price in spans with specific patterns
+            const priceSpans = document.querySelectorAll('span');
+            for (const span of priceSpans) {
+                const text = span.textContent.trim();
+                // Match price patterns like $130, $1,234, etc.
+                const priceMatch = text.match(/^\$[\d,]+$/);
+                if (priceMatch) {
+                    const extractedPrice = parseFloat(text.replace(/[$,]/g, ''));
+                    if (extractedPrice > 0 && extractedPrice < 100000) {
+                        price = extractedPrice;
+                        priceText = text;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Method 3: Find ANY price on the page as fallback
         if (price === 0) {
             const allPrices = bodyText.match(/\$[\d,]+/g) || [];
             if (allPrices.length > 0) {
-                const firstPrice = parseFloat(allPrices[0].replace(/[$,]/g, ''));
-                
-                if (allPrices.length > 1) {
-                    const secondPrice = parseFloat(allPrices[1].replace(/[$,]/g, ''));
-                    if (secondPrice > firstPrice && secondPrice < firstPrice * 3) {
-                        price = firstPrice;
-                        originalPrice = secondPrice;
-                    } else {
-                        price = firstPrice;
-                    }
-                } else {
-                    price = firstPrice;
-                }
-                priceText = '$' + price.toLocaleString();
+                price = parseFloat(allPrices[0].replace(/[$,]/g, ''));
+                priceText = allPrices[0];
             }
         }
         
@@ -114,7 +122,7 @@ SINGLE_LISTING_EXTRACTION_SCRIPT = r"""
             url: window.location.href
         };
     } catch (e) {
-        return { error: e.toString() };
+        return { error: e.toString(), price_value: 0 };
     }
 })()
 """
