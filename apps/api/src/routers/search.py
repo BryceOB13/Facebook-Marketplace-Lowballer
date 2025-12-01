@@ -168,9 +168,17 @@ async def search_marketplace(query: SearchQuery):
         
         logger.info(f"Analyzed {len(new_deals)} new listings (total: {len(deals)})")
         
-        # Filter to only hot/good deals
-        hot_deals = hot_deal_detector.filter_hot_deals(deals)
-        logger.info(f"Found {len(hot_deals)} hot/good deals out of {len(deals)} scored listings")
+        # Return ALL deals - sort by rating then by profit
+        # Include deals even if profit_estimate is None (show them at the end)
+        rating_order = {'HOT': 0, 'GOOD': 1, 'FAIR': 2, 'PASS': 3}
+        all_deals = sorted(
+            deals,
+            key=lambda d: (
+                rating_order.get(d.deal_rating.value if d.deal_rating else 'PASS', 3),
+                -(d.profit_estimate if d.profit_estimate is not None else -9999)
+            )
+        )
+        logger.info(f"Returning {len(all_deals)} deals (all ratings) out of {len(deals)} scored listings")
         
         # Save NEW data to database (skip existing)
         if new_deals:
@@ -231,10 +239,10 @@ async def search_marketplace(query: SearchQuery):
                     query.location, len(unique_listings)
                 )
         
-        # Create result with scored deals
+        # Create result with ALL scored deals
         result = SearchResult(
-            listings=hot_deals,  # Return only hot/good deals
-            total_count=len(hot_deals),
+            listings=all_deals,  # Return all deals, sorted by quality
+            total_count=len(all_deals),
             query_variations=search_prep['query_variations'],
             cached=False,
             search_time_ms=(time.time() - start_time) * 1000
@@ -243,7 +251,7 @@ async def search_marketplace(query: SearchQuery):
         # Cache result
         await orchestrator.cache_results(query, result)
         
-        logger.info(f"Returning {len(hot_deals)} deals to frontend")
+        logger.info(f"Returning {len(all_deals)} deals to frontend")
         return result
         
     except Exception as e:

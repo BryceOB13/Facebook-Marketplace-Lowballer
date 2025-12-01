@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import { DollarSign, BarChart3, Target } from "lucide-react"
 import { api, type Deal, type ViewDealResult } from "@/lib/api"
 import { formatPrice } from "@/lib/utils"
 
@@ -120,7 +121,7 @@ export default function DealDetailPage({ params }: { params: { id: string } }) {
 
               {/* eBay Market Analysis */}
               <div className="rounded-lg border bg-card p-6">
-                <h2 className="text-lg font-semibold mb-4">💰 eBay Market Analysis</h2>
+                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><DollarSign className="h-5 w-5" /> eBay Market Analysis</h2>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Listed Price</span>
@@ -147,14 +148,14 @@ export default function DealDetailPage({ params }: { params: { id: string } }) {
 
               {/* Analysis Reason */}
               <div className="rounded-lg border bg-card p-6">
-                <h2 className="text-lg font-semibold mb-2">📊 Analysis</h2>
+                <h2 className="text-lg font-semibold mb-2 flex items-center gap-2"><BarChart3 className="h-5 w-5" /> Analysis</h2>
                 <p className="text-muted-foreground">{analysis.analysis.reason}</p>
               </div>
 
               {/* Negotiation Strategy */}
               {analysis.negotiation_strategy && (
                 <div className="rounded-lg border bg-blue-500/10 p-6">
-                  <h2 className="text-lg font-semibold mb-4">🎯 Negotiation Strategy</h2>
+                  <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Target className="h-5 w-5" /> Negotiation Strategy</h2>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <span>Initial Offer</span>

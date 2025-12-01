@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import { Clock, Check, X, Lightbulb, Home } from "lucide-react"
 import { api, type Negotiation } from "@/lib/api"
 import { formatPrice, formatDate } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 
 export default function NegotiationsPage() {
   const [negotiations, setNegotiations] = useState<Negotiation[]>([])
@@ -57,53 +59,50 @@ export default function NegotiationsPage() {
           <h1 className="text-3xl font-bold">Negotiations</h1>
           <p className="text-muted-foreground">AI-powered lowball offers</p>
         </div>
-        <Link href="/" className="text-sm text-primary hover:underline">
-          ← Back to Dashboard
-        </Link>
+        <Button variant="ghost" asChild>
+          <Link href="/">
+            <Home className="h-4 w-4 mr-2" />
+            Back to Dashboard
+          </Link>
+        </Button>
       </div>
 
       {/* Filters */}
       <div className="flex gap-2">
-        <button
+        <Button
           onClick={() => setFilter(undefined)}
-          className={`px-4 py-2 rounded-md ${
-            filter === undefined
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
-          }`}
+          variant={filter === undefined ? "default" : "secondary"}
+          className="shadow-md hover:shadow-lg transition-shadow"
         >
           All
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={() => setFilter('awaiting')}
-          className={`px-4 py-2 rounded-md ${
-            filter === 'awaiting'
-              ? 'bg-yellow-500 text-white'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
+          variant="secondary"
+          className={`shadow-md hover:shadow-lg transition-shadow ${
+            filter === 'awaiting' ? 'bg-yellow-500 text-white hover:bg-yellow-600' : ''
           }`}
         >
-          ⏳ Awaiting
-        </button>
-        <button
+          <Clock className="h-4 w-4 mr-1" /> Awaiting
+        </Button>
+        <Button
           onClick={() => setFilter('accepted')}
-          className={`px-4 py-2 rounded-md ${
-            filter === 'accepted'
-              ? 'bg-green-500 text-white'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
+          variant="secondary"
+          className={`shadow-md hover:shadow-lg transition-shadow ${
+            filter === 'accepted' ? 'bg-green-500 text-white hover:bg-green-600' : ''
           }`}
         >
-          ✓ Accepted
-        </button>
-        <button
+          <Check className="h-4 w-4 mr-1" /> Accepted
+        </Button>
+        <Button
           onClick={() => setFilter('rejected')}
-          className={`px-4 py-2 rounded-md ${
-            filter === 'rejected'
-              ? 'bg-red-500 text-white'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
+          variant="secondary"
+          className={`shadow-md hover:shadow-lg transition-shadow ${
+            filter === 'rejected' ? 'bg-red-500 text-white hover:bg-red-600' : ''
           }`}
         >
-          ✗ Rejected
-        </button>
+          <X className="h-4 w-4 mr-1" /> Rejected
+        </Button>
       </div>
 
       {/* Loading */}
@@ -172,8 +171,8 @@ export default function NegotiationsPage() {
           <div className="bg-card rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-2xl font-bold">Negotiation #{selectedNeg.id}</h2>
-              <button onClick={() => setSelectedNeg(null)} className="text-muted-foreground hover:text-foreground">
-                ✕
+              <button onClick={() => setSelectedNeg(null)} className="text-muted-foreground hover:text-foreground p-1">
+                <X className="h-5 w-5" />
               </button>
             </div>
 
@@ -221,7 +220,7 @@ export default function NegotiationsPage() {
             {/* Suggested Action */}
             {selectedNeg.suggested_message && (
               <div className="bg-accent p-4 rounded-lg mb-4">
-                <div className="font-semibold mb-2">💡 Suggested Message:</div>
+                <div className="font-semibold mb-2 flex items-center gap-2"><Lightbulb className="h-4 w-4" /> Suggested Message:</div>
                 <p className="text-sm mb-2">{selectedNeg.suggested_message}</p>
                 {selectedNeg.suggested_offer && (
                   <div className="text-sm text-muted-foreground">

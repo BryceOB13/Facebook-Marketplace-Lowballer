@@ -17,7 +17,7 @@ class ListingExtractor:
     """Optimized listing extraction with single DOM query."""
     
     # Optimized extraction script - single pass, returns JSON with metadata
-    EXTRACTION_SCRIPT = """
+    EXTRACTION_SCRIPT = r"""
     (function() {
         const startTime = performance.now();
         const listings = [];
@@ -29,7 +29,7 @@ class ListingExtractor:
         links.forEach((link, index) => {
             try {
                 // Extract ID from URL
-                const match = link.href.match(/\\/marketplace\\/item\\/(\\d+)/);
+                const match = link.href.match(/\/marketplace\/item\/(\d+)/);
                 if (!match || seenIds.has(match[1])) return;
                 seenIds.add(match[1]);
                 
@@ -58,7 +58,7 @@ class ListingExtractor:
                         const text = span.textContent.trim();
                         
                         // Skip unwanted patterns
-                        const isTimeIndicator = /^\\d+[hdwm]/.test(text);
+                        const isTimeIndicator = /^\d+[hdwm]/.test(text);
                         const isBadge = text.includes('Price dropped') || 
                                        text.includes('Pending') || 
                                        text.includes('Sold') || 
@@ -75,19 +75,31 @@ class ListingExtractor:
                     }
                 }
                 
-                // Extract price - first $ pattern
+                // Extract price - look for standalone price patterns
                 let price = '';
-                const priceMatch = container.textContent.match(/\\$[\\d,]+/);
-                if (priceMatch) {
-                    price = priceMatch[0];
+                const allSpans = container.querySelectorAll('span');
+                for (const span of allSpans) {
+                    const text = span.textContent.trim();
+                    // Match standalone price like "$2,800" but not "$2,8002000"
+                    if (/^\$[\d,]+$/.test(text)) {
+                        price = text;
+                        break;
+                    }
+                }
+                
+                // Fallback: regex from container text
+                if (!price) {
+                    const priceMatches = container.textContent.match(/\$[\d,]+/g);
+                    if (priceMatches && priceMatches.length > 0) {
+                        price = priceMatches[0];
+                    }
                 }
                 
                 // Extract location
                 let location = '';
-                const allSpans = container.querySelectorAll('span');
                 for (const span of allSpans) {
                     const text = span.textContent.trim();
-                    if ((text.match(/^[A-Z][a-z]+,\\s*[A-Z]{2}$/) || text.includes('miles')) && text !== title) {
+                    if ((text.match(/^[A-Z][a-z]+,\s*[A-Z]{2}$/) || text.includes('miles')) && text !== title) {
                         location = text;
                         break;
                     }
@@ -122,14 +134,23 @@ class ListingExtractor:
     })()
     """
 
-    
     def parse_price_value(self, price_str: str) -> Optional[int]:
-        """Extract numeric value from price string."""
+        """Extract numeric value from price string, handling year contamination."""
         if not price_str:
             return None
         
-        # Remove $ and commas, extract numbers
+        # Remove $ and commas
         clean = price_str.replace('$', '').replace(',', '')
+        
+        # Check if the number ends with what looks like a year (1900-2099)
+        if len(clean) > 4 and clean.isdigit():
+            last_four = clean[-4:]
+            year = int(last_four)
+            if 1900 <= year <= 2099:
+                # Remove the year from the end
+                clean = clean[:-4]
+        
+        # Extract the price
         match = re.search(r'\d+', clean)
         if match:
             try:
@@ -138,14 +159,39 @@ class ListingExtractor:
                 return None
         return None
     
+    def clean_price_string(self, price_str: str) -> str:
+        """Clean price string by removing year contamination."""
+        if not price_str or price_str == 'Price not listed':
+            return price_str
+        
+        # Extract just the price part
+        match = re.match(r'(\$[\d,]+)', price_str)
+        if match:
+            price_part = match.group(1)
+            clean_num = price_part.replace('$', '').replace(',', '')
+            
+            # Check if there's a year stuck to it (e.g., $2,8002000 -> $2,800)
+            if len(clean_num) > 4 and clean_num.isdigit():
+                last_four = clean_num[-4:]
+                year = int(last_four)
+                if 1900 <= year <= 2099:
+                    # Remove year and reformat
+                    clean_num = clean_num[:-4]
+                    if clean_num:
+                        return f"${int(clean_num):,}"
+            return price_part
+        return price_str
+    
     def create_listing_from_data(self, data: dict) -> Listing:
         """Create Listing object from extracted data."""
-        price_value = self.parse_price_value(data.get('price', ''))
+        raw_price = data.get('price', 'Price not listed')
+        clean_price = self.clean_price_string(raw_price)
+        price_value = self.parse_price_value(raw_price)
         
         return Listing(
             id=data['id'],
             title=data.get('title', 'Untitled'),
-            price=data.get('price', 'Price not listed'),
+            price=clean_price,
             price_value=price_value,
             location=data.get('location'),
             image_url=data.get('image_url'),

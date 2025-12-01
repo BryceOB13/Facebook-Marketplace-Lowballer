@@ -2,13 +2,32 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
-import { api, type Deal } from "@/lib/api"
+import { Flame, Check, DollarSign, BarChart3, Target, MessageSquare, X, Home, Minus } from "lucide-react"
+import { api, type Deal, type ViewDealResult } from "@/lib/api"
 import { formatPrice } from "@/lib/utils"
+import { NegotiationModal } from "@/components/NegotiationModal"
+import { Button } from "@/components/ui/button"
+
+interface NegotiationBounds {
+  strategy_name: string
+  strategy_tier: string
+  initial_offer: number
+  target_price: number
+  walk_away_price: number
+  max_increase_per_round_pct: number
+  tone_guidance: string
+  opening_approach: string
+}
 
 export default function DealsPage() {
   const [deals, setDeals] = useState<Deal[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<string | undefined>(undefined)
+  const [selectedDeal, setSelectedDeal] = useState<any | null>(null)
+  const [dealLoading, setDealLoading] = useState(false)
+  const [negotiationId, setNegotiationId] = useState<string | null>(null)
+  const [negotiationBounds, setNegotiationBounds] = useState<NegotiationBounds | null>(null)
+  const [negotiationListing, setNegotiationListing] = useState<any | null>(null)
 
   useEffect(() => {
     loadDeals()
@@ -26,6 +45,93 @@ export default function DealsPage() {
     }
   }
 
+  async function handleViewDeal(deal: Deal) {
+    setDealLoading(true)
+    setSelectedDeal({ loading: true, deal })
+    try {
+      const result = await api.viewDeal(deal.url, deal.price_value)
+      setSelectedDeal({ ...result, deal })
+    } catch (err) {
+      console.error('Failed to analyze deal:', err)
+      setSelectedDeal(null)
+    } finally {
+      setDealLoading(false)
+    }
+  }
+
+  async function handleNegotiateFromCard(deal: Deal) {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    
+    try {
+      // Get negotiation bounds using existing deal data
+      const boundsRes = await fetch(`${apiBase}/api/negotiate/bounds`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asking_price: deal.price_value,
+          market_avg: deal.ebay_avg_price || deal.price_value * 1.3,
+          deal_rating: deal.deal_rating || 'FAIR',
+          listing_age_days: null
+        })
+      })
+      const bounds = await boundsRes.json()
+      
+      // Open negotiation modal directly
+      setNegotiationBounds(bounds)
+      setNegotiationListing({
+        id: deal.id,
+        title: deal.title,
+        price: deal.price_value,
+        url: deal.url,
+        market_avg: deal.ebay_avg_price || 0
+      })
+      
+    } catch (err) {
+      console.error('Failed to start negotiation:', err)
+      alert('Failed to start negotiation. Please try again.')
+    }
+  }
+
+  async function handleStartNegotiation(dealData: any) {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    
+    try {
+      // Get negotiation bounds only - no auto-start
+      const boundsRes = await fetch(`${apiBase}/api/negotiate/bounds`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asking_price: dealData.deal?.price_value || dealData.listing?.price,
+          market_avg: dealData.analysis?.ebay_avg_price || 0,
+          deal_rating: dealData.analysis?.rating || 'FAIR',
+          listing_age_days: null
+        })
+      })
+      const bounds = await boundsRes.json()
+      
+      // Set up negotiation modal with bounds (no auto-start)
+      setNegotiationBounds(bounds)
+      setNegotiationListing({
+        id: dealData.deal?.id,
+        title: dealData.deal?.title || dealData.listing?.title,
+        price: dealData.deal?.price_value || dealData.listing?.price,
+        url: dealData.deal?.url,
+        market_avg: dealData.analysis?.ebay_avg_price || 0
+      })
+      setSelectedDeal(null) // Close the deal modal
+      
+    } catch (err) {
+      console.error('Failed to start negotiation:', err)
+      alert('Failed to start negotiation. Please try again.')
+    }
+  }
+
+  function closeNegotiation() {
+    setNegotiationId(null)
+    setNegotiationBounds(null)
+    setNegotiationListing(null)
+  }
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       {/* Header */}
@@ -34,53 +140,50 @@ export default function DealsPage() {
           <h1 className="text-3xl font-bold">Scored Deals</h1>
           <p className="text-muted-foreground">AI-evaluated marketplace opportunities</p>
         </div>
-        <Link href="/" className="text-sm text-primary hover:underline">
-          ← Back to Dashboard
-        </Link>
+        <Button variant="ghost" asChild>
+          <Link href="/">
+            <Home className="h-4 w-4 mr-2" />
+            Back to Dashboard
+          </Link>
+        </Button>
       </div>
 
       {/* Filters */}
       <div className="flex gap-2">
-        <button
+        <Button
           onClick={() => setFilter(undefined)}
-          className={`px-4 py-2 rounded-md ${
-            filter === undefined
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
-          }`}
+          variant={filter === undefined ? "default" : "secondary"}
+          className="shadow-md hover:shadow-lg transition-shadow"
         >
           All
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={() => setFilter('HOT')}
-          className={`px-4 py-2 rounded-md ${
-            filter === 'HOT'
-              ? 'bg-red-500 text-white'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
+          variant="secondary"
+          className={`shadow-md hover:shadow-lg transition-shadow ${
+            filter === 'HOT' ? 'bg-red-500 text-white hover:bg-red-600' : ''
           }`}
         >
-          🔥 HOT
-        </button>
-        <button
+          <Flame className="h-4 w-4 mr-1" /> HOT
+        </Button>
+        <Button
           onClick={() => setFilter('GOOD')}
-          className={`px-4 py-2 rounded-md ${
-            filter === 'GOOD'
-              ? 'bg-green-500 text-white'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
+          variant="secondary"
+          className={`shadow-md hover:shadow-lg transition-shadow ${
+            filter === 'GOOD' ? 'bg-green-500 text-white hover:bg-green-600' : ''
           }`}
         >
-          ✓ GOOD
-        </button>
-        <button
+          <Check className="h-4 w-4 mr-1" /> GOOD
+        </Button>
+        <Button
           onClick={() => setFilter('FAIR')}
-          className={`px-4 py-2 rounded-md ${
-            filter === 'FAIR'
-              ? 'bg-yellow-500 text-white'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/90'
+          variant="secondary"
+          className={`shadow-md hover:shadow-lg transition-shadow ${
+            filter === 'FAIR' ? 'bg-yellow-500 text-white hover:bg-yellow-600' : ''
           }`}
         >
-          ~ FAIR
-        </button>
+          <Minus className="h-4 w-4 mr-1" /> FAIR
+        </Button>
       </div>
 
       {/* Loading */}
@@ -94,9 +197,13 @@ export default function DealsPage() {
       {!loading && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {deals.map((deal) => (
-            <div key={deal.id} className="rounded-lg border bg-card p-4 hover:bg-accent transition-colors">
+            <div 
+              key={deal.id} 
+              className="rounded-lg border bg-card p-4 hover:bg-accent transition-colors cursor-pointer"
+              onClick={() => handleViewDeal(deal)}
+            >
               {deal.image_url && (
-                <div className="aspect-video bg-muted rounded-md mb-3 overflow-hidden">
+                <div className="aspect-square bg-muted rounded-md mb-3 overflow-hidden">
                   <img 
                     src={deal.image_url} 
                     alt={deal.title}
@@ -151,21 +258,21 @@ export default function DealsPage() {
                 )}
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 <a
                   href={deal.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 px-3 py-2 text-sm bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/90 text-center"
                 >
-                  View
+                  View on FB
                 </a>
-                <Link
-                  href={`/negotiations/new?listing_id=${deal.id}`}
+                <button
+                  onClick={() => handleNegotiateFromCard(deal)}
                   className="flex-1 px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-center"
                 >
                   Negotiate
-                </Link>
+                </button>
               </div>
             </div>
           ))}
@@ -176,6 +283,104 @@ export default function DealsPage() {
         <div className="text-center py-12 text-muted-foreground">
           No deals found. Try running a search first.
         </div>
+      )}
+
+      {/* Deal Analysis Modal */}
+      {selectedDeal && (
+        <div className="fixed top-0 left-0 right-0 bottom-0 w-screen h-screen bg-black/60 flex items-center justify-center z-[90] p-4" style={{ margin: 0 }} onClick={() => setSelectedDeal(null)}>
+          <div className="bg-card rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-border" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-card border-b p-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold">
+                {selectedDeal.loading ? 'Analyzing Deal...' : selectedDeal.deal?.title}
+              </h2>
+              <button onClick={() => setSelectedDeal(null)} className="text-muted-foreground hover:text-foreground p-1"><X className="h-5 w-5" /></button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {selectedDeal.loading && (
+                <div className="text-center py-12">
+                  <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
+                  <p className="text-muted-foreground">Fetching eBay market data...</p>
+                </div>
+              )}
+
+              {!selectedDeal.loading && selectedDeal.analysis && (
+                <>
+                  <div className="flex items-center gap-3">
+                    <span className={`px-3 py-1 text-sm font-bold rounded ${
+                      selectedDeal.analysis.rating === 'HOT' ? 'bg-red-500 text-white' :
+                      selectedDeal.analysis.rating === 'GOOD' ? 'bg-green-500 text-white' :
+                      selectedDeal.analysis.rating === 'FAIR' ? 'bg-yellow-500 text-white' :
+                      'bg-gray-500 text-white'
+                    }`}>{selectedDeal.analysis.rating}</span>
+                    <span className="text-muted-foreground">Score: {selectedDeal.analysis.score?.toFixed(1)}/100</span>
+                  </div>
+
+                  <div className="rounded-lg border bg-background p-4">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><DollarSign className="h-4 w-4" /> eBay Market Analysis</h3>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Listed Price</span>
+                        <span className="font-semibold">{selectedDeal.deal?.price}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">eBay Avg Price</span>
+                        <span className="font-semibold">${selectedDeal.analysis.ebay_avg_price?.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between pt-2 border-t">
+                        <span className="text-muted-foreground">Est. Profit</span>
+                        <span className={`font-semibold ${selectedDeal.analysis.profit_estimate > 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {selectedDeal.analysis.profit_estimate > 0 ? '+' : ''}${selectedDeal.analysis.profit_estimate?.toFixed(0)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">ROI</span>
+                        <span className={`font-semibold ${selectedDeal.analysis.roi_percent > 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {selectedDeal.analysis.roi_percent?.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border bg-background p-4">
+                    <h3 className="font-semibold mb-2 flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Analysis</h3>
+                    <p className="text-sm text-muted-foreground">{selectedDeal.analysis.reason}</p>
+                  </div>
+
+                  {selectedDeal.negotiation_strategy && (
+                    <div className="rounded-lg border bg-blue-500/10 p-4">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Target className="h-4 w-4" /> Negotiation Strategy</h3>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between"><span>Initial Offer</span><span className="font-semibold">${selectedDeal.negotiation_strategy.initial_offer?.toFixed(0)}</span></div>
+                        <div className="flex justify-between"><span>Target Price</span><span className="font-semibold">${selectedDeal.negotiation_strategy.target_price?.toFixed(0)}</span></div>
+                        <div className="flex justify-between"><span>Walk Away Above</span><span className="font-semibold">${selectedDeal.negotiation_strategy.walk_away_price?.toFixed(0)}</span></div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <a href={selectedDeal.deal?.url} target="_blank" rel="noopener noreferrer" className="flex-1 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/90 text-center font-semibold text-sm">View on Facebook</a>
+                    <button 
+                      onClick={() => handleStartNegotiation(selectedDeal)} 
+                      className="flex-1 px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 font-semibold text-sm"
+                    >
+                      <MessageSquare className="h-4 w-4 inline mr-1" /> Start Negotiation
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Negotiation Modal */}
+      {negotiationBounds && negotiationListing && (
+        <NegotiationModal
+          listing={negotiationListing}
+          bounds={negotiationBounds}
+          onClose={closeNegotiation}
+        />
       )}
     </div>
   )

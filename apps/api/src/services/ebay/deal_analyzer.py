@@ -281,11 +281,12 @@ class DealAnalyzer:
         if profit < 0:
             return DealRating.PASS
         
-        if score >= 80:
+        # More lenient thresholds - any positive profit item can be FAIR or better
+        if score >= 70 or (profit >= 50 and score >= 50):
             return DealRating.HOT
-        elif score >= 60:
+        elif score >= 50 or (profit >= 20 and score >= 30):
             return DealRating.GOOD
-        elif score >= 40:
+        elif score >= 25 or profit > 0:
             return DealRating.FAIR
         else:
             return DealRating.PASS

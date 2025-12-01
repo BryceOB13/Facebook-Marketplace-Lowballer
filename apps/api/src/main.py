@@ -194,9 +194,10 @@ async def demo_page():
 
 
 # Import and include routers
-from src.routers import search, deals, negotiations, ebay_notifications
+from src.routers import search, deals, negotiations, ebay_notifications, negotiate
 
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(deals.router, prefix="/api", tags=["deals"])
 app.include_router(negotiations.router, prefix="/api", tags=["negotiations"])
 app.include_router(ebay_notifications.router, prefix="/api", tags=["ebay"])
+app.include_router(negotiate.router, prefix="/api", tags=["negotiate"])

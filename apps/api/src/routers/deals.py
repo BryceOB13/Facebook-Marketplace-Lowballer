@@ -261,11 +261,12 @@ async def view_deal(
         if not listing_data:
             raise HTTPException(status_code=404, detail="Could not scrape listing from URL")
         
-        # Use provided price as fallback if scraper didn't get it
-        if price and (not listing_data.get('price_value') or listing_data.get('price_value') == 0):
+        # ALWAYS use provided price if given - this is what the user sees in the UI
+        # The scraper might extract a different price from the detail page
+        if price and price > 0:
             listing_data['price_value'] = price
             listing_data['price'] = f"${price:,.0f}"
-            logger.info(f"Using provided price fallback: ${price}")
+            logger.info(f"Using provided price from frontend: ${price}")
         
         # Analyze with eBay integration
         viewer = EnhancedDealViewer()
